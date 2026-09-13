@@ -4,13 +4,13 @@ Mnemos is a TypeScript cognitive-harness runtime. Its architectural direction an
 
 ## Current status
 
-**Phase 6 — Artifact Store is implemented.** The project currently provides:
+**Phase 7 — Tool Runtime is implemented.** The project currently provides:
 
-- `@mnemos/core`: `Harness`, separate Visible and Hidden Agent abstractions over replaceable `ModelProvider` / `EmbeddingProvider` interfaces, context accounting, memory consolidation, hybrid retrieval / evaluation contracts, and Artifact / spill contracts.
+- `@mnemos/core`: `Harness`, separate Visible and Hidden Agent abstractions over replaceable `ModelProvider` / `EmbeddingProvider` interfaces, context accounting, memory consolidation, hybrid retrieval / evaluation contracts, Artifact / spill contracts, and a provider-neutral Tool Runtime.
 - `@mnemos/storage`: SQLite-backed append-only `HistoryStore`, separate mutable `StateStore`, durable compaction checkpoints, SQLite/FTS5 Memory, a durable consolidation-job queue, a rebuildable local vector index, and SQLite metadata plus filesystem-backed Artifacts.
 - `@mnemos/cli`: an interactive, persistent chat shell using the mock provider.
 
-The runtime emits `message.received`, `message.generated`, `context.pressure`, `context.compaction.requested`, `context.evicted`, and the `memory.consolidation.*` / `memory.*` lifecycle events.
+The runtime emits `message.received`, `message.generated`, `context.pressure`, `context.compaction.requested`, `context.evicted`, the `memory.consolidation.*` / `memory.*` lifecycle events, and compact `tool.*` lifecycle events.
 
 ## Context compaction
 
@@ -105,9 +105,37 @@ An `ArtifactRecord` contains scope (`session` or `persistent`), optional expiry,
 
 Bodies use generated UUID filenames rather than display names, remain confined to the configured storage directory, are written to a temporary file and atomically renamed before metadata is published, and are checksum-verified on full reads or with `verify`. Metadata reads do not touch body files. Range reads use filesystem offsets; text query runs locally against a bounded, rebuildable line/chunk index and rejects binary MIME types. A missing body remains visible in metadata and raises a specific error on body operations so it can be diagnosed or cleaned up safely.
 
-`ArtifactSpillService` is the Phase 6 boundary for a future dispatcher: small strings may remain inline; binary values and larger strings or streams are stored and returned as an `artifact://…` handle. It consumes `string`, `Uint8Array`, or `AsyncIterable<Uint8Array>` without converting a stream into a giant context string. It intentionally does **not** execute tools or expose model-callable `artifact.*` tools—that remains Phase 7.
+`ArtifactSpillService` is used by the Phase 7 dispatcher: small strings may remain inline; binary values and larger strings or streams are stored and returned as an `artifact://…` handle. It consumes `string`, `Uint8Array`, or `AsyncIterable<Uint8Array>` without converting a stream into a giant context string.
 
-Not implemented yet: tool runtime/discovery, native model tool calling, PTC, memory decay, entity-graph reasoning, and distributed retrieval. These remain intentionally reserved for Phases 7–9 and later.
+## Tool Runtime
+
+Phase 7 adds the formal execution path for all current and future tools:
+
+```text
+Model ToolCall → ToolRegistry → permission check → Zod validation
+→ timeout-aware execution → output normalization / Artifact spill
+→ audit + tool lifecycle event → structured ToolResult
+```
+
+`ToolDefinition` provides a stable dotted name, description, Zod input/output schemas, explicit execution context, required permissions, side-effect classification (`none`, `read`, `write`, `destructive`), concurrency hint, and optional timeout. `ToolRegistry` only owns registration and discovery of definitions; `ToolDispatcher` is the sole execution gate for native calls and is the required future gate for PTC.
+
+Dispatcher results are either a bounded inline value or an Artifact handle. Invalid arguments, missing tools, denied permissions, timeouts, invalid output, spill failures, and execution exceptions return structured, model-safe error envelopes; internal exception text and stacks are never returned to the model. The output policy has independent inline, spill, and model-visible byte limits. Binary output is always externalized.
+
+The initial cognitive tool set is:
+
+- `memory.search`, `memory.get`, `memory.source`, `memory.timeline`, `memory.remember`
+- `history.search`, `history.get`
+- `context.inspect`, `context.pin`, `context.unpin`
+- `state.get`, `state.set`, `state.patch`
+- `artifact.get`, `artifact.read`, `artifact.query`, `artifact.create`, `artifact.delete`
+
+`memory.remember` calls the existing consolidation-job path only; it cannot mutate canonical Memory. `artifact.read` is range-limited for model calls, and oversized text or any binary result is spilled by the dispatcher. `history.search` is deliberately a bounded basic lexical scan at this stage, not a second RAG implementation.
+
+Permissions are host-provided in `ToolDispatchContext` (`sessionId`, `agentId`, `principal`, granted `domain:verb` permissions) and cannot be elevated by model arguments. `ToolAuditStore` is a replaceable audit boundary; `InMemoryToolAuditStore` records principal, tool, call ID, timing, success/denial/failure, and spill status. Events (`tool.called`, `tool.completed`, `tool.failed`, `tool.denied`, `tool.output.spilled`) contain identifiers, timing, status, and handles only—not raw arguments or large outputs.
+
+Zod remains the single authored schema. The registry exports a deterministic JSON Schema subset for provider-neutral `ModelToolDeclaration`s; no vendor SDK types enter Core. `ModelProvider` can now return normal text or a native tool-call response. When `Harness` receives a tool-call response, it records an assistant tool-call message and paired tool result in append-only History, dispatches through the sole runtime entry point, rebuilds Context, and asks the model to continue. `maxToolIterations` terminates loops safely. Tool declaration, tool-call, and tool-result tokens are all included in Context accounting; spilled results record only their small handles in History.
+
+Not implemented yet: PTC code execution, a generated PTC SDK, sandboxing, a PTC concurrency scheduler, dynamic `tools.search` / `tools.describe`, external connectors, memory decay, entity-graph reasoning, and distributed retrieval. These remain intentionally reserved for Phases 8–9 and later.
 
 ## Requirements
 
@@ -125,8 +153,8 @@ pnpm eval:retrieval
 pnpm chat
 ```
 
-`pnpm chat` stores data in `./mnemos.sqlite` by default. Set `MNEMOS_DB_PATH` and `MNEMOS_SESSION_ID` to choose the database location and conversation session.
+`pnpm chat` stores data in `./mnemos.sqlite` by default. Set `MNEMOS_DB_PATH` and `MNEMOS_SESSION_ID` to choose the database location and conversation session. The CLI intentionally remains a minimal mock chat host; embedders enable the native tool loop by supplying `ToolRegistry`, `ToolDispatcher`, and host-granted permissions to `Harness`.
 
-## Phase 7 extension points
+## Phase 8 extension points
 
-Phase 7 can adapt `ArtifactStore` and `ArtifactSpillService` behind a `ToolRegistry` / `ToolDispatcher` without moving execution, permissions, or model schemas into either Artifact package. Artifact handles already contain the stable reference information that a dispatcher can return to the Visible Agent. `MemoryVectorStore`, `EmbeddingProvider`, and `MemoryReranker` remain independently replaceable for future sqlite-vec, external model, cross-encoder, or larger-scale adapters.
+Phase 8 must invoke `ToolDispatcher` rather than domain services directly. The existing `ToolDefinition` metadata (`requiredPermissions`, side effects, `concurrencySafe`, timeout), JSON Schema export, structured `ToolCall` / `ToolResult`, output policy, Artifact spill, and host-provided execution context are the intended PTC SDK and scheduler boundaries. No PTC runtime or sandbox exists yet. `MemoryVectorStore`, `EmbeddingProvider`, and `MemoryReranker` remain independently replaceable for future sqlite-vec, external model, cross-encoder, or larger-scale adapters.

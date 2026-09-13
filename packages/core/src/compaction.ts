@@ -275,11 +275,11 @@ export class CompactionService {
     this.automaticPinTokenBudget = options.automaticPinTokenBudget ?? Math.floor(options.context.budgets.pinnedTokenBudget / 2);
   }
 
-  prepare(sessionId: string, systemPrompt = ""): Promise<CompactionPreparation> {
-    return this.withSessionLock(sessionId, () => this.prepareUnlocked(sessionId, systemPrompt));
+  prepare(sessionId: string, systemPrompt = "", toolSchemas: readonly string[] = []): Promise<CompactionPreparation> {
+    return this.withSessionLock(sessionId, () => this.prepareUnlocked(sessionId, systemPrompt, toolSchemas));
   }
 
-  private async prepareUnlocked(sessionId: string, systemPrompt: string): Promise<CompactionPreparation> {
+  private async prepareUnlocked(sessionId: string, systemPrompt: string, toolSchemas: readonly string[]): Promise<CompactionPreparation> {
     let checkpoint = await this.options.checkpoints.get(sessionId);
     if (checkpoint?.automaticPin) this.options.context.upsertPin(checkpoint.automaticPin);
 
@@ -287,7 +287,7 @@ export class CompactionService {
     let recentMessages = this.afterCheckpoint(history, checkpoint?.evictedThroughMessageId);
     const evictions: ContextEviction[] = [];
 
-    while (this.needsCompaction(sessionId, recentMessages, systemPrompt)) {
+    while (this.needsCompaction(sessionId, recentMessages, systemPrompt, toolSchemas)) {
       const selection = this.selector.select(recentMessages, this.options.context.budgets.recentRawTokenBudget);
       if (!selection) break;
 
@@ -345,11 +345,11 @@ export class CompactionService {
         pinnedContext: automaticPin,
       });
     }
-    return { context: this.options.context.buildVisible(sessionId, recentMessages, systemPrompt), evictions };
+    return { context: this.options.context.buildVisible(sessionId, recentMessages, systemPrompt, [], toolSchemas), evictions };
   }
 
-  private needsCompaction(sessionId: string, recentMessages: readonly HistoryMessage[], systemPrompt: string): boolean {
-    const context = this.options.context.buildVisible(sessionId, recentMessages, systemPrompt);
+  private needsCompaction(sessionId: string, recentMessages: readonly HistoryMessage[], systemPrompt: string, toolSchemas: readonly string[]): boolean {
+    const context = this.options.context.buildVisible(sessionId, recentMessages, systemPrompt, [], toolSchemas);
     return context.stats.recentRawTokens > this.options.context.budgets.recentRawTokenBudget
       || context.stats.pressure >= this.options.context.budgets.highPressureThreshold;
   }

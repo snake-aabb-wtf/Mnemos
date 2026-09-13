@@ -19,7 +19,7 @@ const harness = new Harness({
 });
 
 const readline = createInterface({ input, output, terminal: true });
-console.log("Mnemos Phase 1 chat (mock provider). Type /exit to quit.");
+console.log("Mnemos mock chat. Type /exit to quit.");
 try {
   readline.setPrompt("> ");
   readline.prompt();

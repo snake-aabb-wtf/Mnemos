@@ -3,6 +3,8 @@ import type { ContextEviction } from "./compaction.js";
 import type { ConsolidationJob, ConsolidationResult } from "./consolidation.js";
 import type { HistoryMessage } from "./contracts.js";
 import type { MemoryRecord } from "./memory.js";
+import type { ArtifactHandle } from "./artifact.js";
+import type { ToolExecutionError } from "./tool.js";
 
 export interface HarnessEventMap {
   "message.received": { message: HistoryMessage };
@@ -22,6 +24,45 @@ export interface HarnessEventMap {
   "memory.created": { jobId: string; memory: MemoryRecord };
   "memory.updated": { jobId: string; memory: MemoryRecord };
   "memory.superseded": { jobId: string; superseded: MemoryRecord; replacement: MemoryRecord };
+  /** Tool events intentionally carry identifiers and sizes, never raw arguments or outputs. */
+  "tool.called": { callId: string; toolName: string; sessionId: string; agentId: string; status: "called" };
+  "tool.completed": {
+    callId: string;
+    toolName: string;
+    sessionId: string;
+    agentId: string;
+    durationMs: number;
+    status: "success";
+    outputKind: "inline" | "artifact";
+  };
+  "tool.failed": {
+    callId: string;
+    toolName: string;
+    sessionId: string;
+    agentId: string;
+    durationMs: number;
+    status: "error";
+    errorCode: ToolExecutionError["code"];
+  };
+  "tool.denied": {
+    callId: string;
+    toolName: string;
+    sessionId: string;
+    agentId: string;
+    durationMs: number;
+    status: "denied";
+    errorCode: "permission_denied";
+  };
+  "tool.output.spilled": {
+    callId: string;
+    toolName: string;
+    sessionId: string;
+    agentId: string;
+    durationMs: number;
+    status: "success";
+    handle: ArtifactHandle;
+    serializedBytes: number;
+  };
 }
 
 type Listener<T> = (payload: T) => void | Promise<void>;

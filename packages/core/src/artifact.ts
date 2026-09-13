@@ -164,6 +164,10 @@ export const artifactSpillPolicySchema = z.object({
 });
 
 export type ArtifactSpillInput = Omit<ArtifactCreateInput, "content"> & { content: ArtifactContent };
+export interface ArtifactSpillOptions {
+  /** Runtime result processing can force externalization even below its local policy. */
+  forceArtifact?: boolean;
+}
 export type ArtifactSpillResult =
   | { kind: "inline"; content: string; sizeBytes: number }
   | { kind: "artifact"; handle: ArtifactHandle };
@@ -179,13 +183,13 @@ export class ArtifactSpillService {
     this.policy = artifactSpillPolicySchema.parse({ ...defaultArtifactSpillPolicy, ...policy });
   }
 
-  async spill(input: ArtifactSpillInput): Promise<ArtifactSpillResult> {
+  async spill(input: ArtifactSpillInput, options: ArtifactSpillOptions = {}): Promise<ArtifactSpillResult> {
     if (typeof input.content === "string") {
       const sizeBytes = Buffer.byteLength(input.content);
       // Both controls matter: the threshold expresses normal spill behavior and
       // maxInlineBytes remains a hard context-safety cap for callers.
       const inlineLimit = Math.min(this.policy.maxInlineBytes, this.policy.spillThresholdBytes);
-      if (sizeBytes <= inlineLimit) return { kind: "inline", content: input.content, sizeBytes };
+      if (!options.forceArtifact && sizeBytes <= inlineLimit) return { kind: "inline", content: input.content, sizeBytes };
     }
     const record = await this.store.create(input);
     return { kind: "artifact", handle: toArtifactHandle(record) };

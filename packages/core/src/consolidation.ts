@@ -274,6 +274,7 @@ export class ModelProviderHiddenAgent implements HiddenAgent {
         responseSchema: stage === "extract" ? "{ candidates: HiddenMemoryCandidate[] }" : "{ decisions: ConsolidationDecision[] }",
       }),
     });
+    if (response.kind === "tool-calls") throw new Error(`Hidden Agent cannot request tools during ${stage}`);
     try {
       return JSON.parse(response.content) as unknown;
     } catch {
@@ -291,6 +292,7 @@ export class ModelProviderHiddenAgent implements HiddenAgent {
       pinned: [],
       recentMessages: messages,
       artifactHandles: [],
+      toolSchemas: [],
       stats: {
         usedTokens,
         contextLimit: this.config.contextLimit,
@@ -298,6 +300,7 @@ export class ModelProviderHiddenAgent implements HiddenAgent {
         pinnedTokens: 0,
         recentRawTokens: usedTokens,
         artifactHandleTokens: 0,
+        toolSchemaTokens: 0,
         retrievedMemoryTokens: 0,
         toolResultTokens: 0,
         reservedTokens: 0,

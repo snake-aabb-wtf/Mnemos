@@ -302,6 +302,8 @@ interface ContextStats {
   systemTokens: number;
   pinnedTokens: number;
   recentRawTokens: number;
+  artifactHandleTokens: number;
+  toolSchemaTokens: number;
   retrievedMemoryTokens: number;
   toolResultTokens: number;
 

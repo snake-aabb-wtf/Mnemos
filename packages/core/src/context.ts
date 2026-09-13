@@ -61,6 +61,8 @@ export interface ContextStats {
   recentRawTokens: number;
   /** Artifact handles are context-safe references; their backing bodies are excluded. */
   artifactHandleTokens: number;
+  /** Native tool declarations offered to the model in this context. */
+  toolSchemaTokens: number;
   retrievedMemoryTokens: number;
   toolResultTokens: number;
   reservedTokens: number;
@@ -71,6 +73,8 @@ export interface BuiltContext {
   pinned: readonly PinnedContext[];
   recentMessages: readonly HistoryMessage[];
   artifactHandles: readonly ArtifactHandle[];
+  /** Compact rendered native-tool declarations; Phase 9 can selectively reduce this list. */
+  toolSchemas: readonly string[];
   stats: ContextStats;
 }
 
@@ -143,21 +147,29 @@ export class ContextManager {
     recentMessages: readonly HistoryMessage[],
     systemPrompt = "",
     artifactHandles: readonly ArtifactHandle[] = [],
+    toolSchemas: readonly string[] = [],
   ): BuiltContext {
     const pins = this.listPins(sessionId);
     const systemTokens = this.tokenEstimator.estimateText(systemPrompt);
     const pinnedTokens = this.pinTokens(pins);
-    const recentRawTokens = recentMessages.reduce((sum, message) => sum + this.tokenEstimator.estimateMessage(message), 0);
+    const recentRawTokens = recentMessages
+      .filter((message) => message.role !== "tool")
+      .reduce((sum, message) => sum + this.tokenEstimator.estimateMessage(message), 0);
+    const toolResultTokens = recentMessages
+      .filter((message) => message.role === "tool")
+      .reduce((sum, message) => sum + this.tokenEstimator.estimateMessage(message), 0);
     const artifactHandleTokens = artifactHandles.reduce(
       (sum, handle) => sum + this.tokenEstimator.estimateText(artifactHandleContextText(handle)),
       0,
     );
-    const usedTokens = systemTokens + pinnedTokens + recentRawTokens + artifactHandleTokens;
+    const toolSchemaTokens = toolSchemas.reduce((sum, schema) => sum + this.tokenEstimator.estimateText(schema), 0);
+    const usedTokens = systemTokens + pinnedTokens + recentRawTokens + artifactHandleTokens + toolSchemaTokens + toolResultTokens;
     const pressure = Math.min(1, (usedTokens + this.budgets.reservedTokens) / this.budgets.contextLimit);
     return {
       pinned: pins,
       recentMessages,
       artifactHandles,
+      toolSchemas,
       stats: {
         usedTokens,
         contextLimit: this.budgets.contextLimit,
@@ -165,11 +177,24 @@ export class ContextManager {
         pinnedTokens,
         recentRawTokens,
         artifactHandleTokens,
+        toolSchemaTokens,
         retrievedMemoryTokens: 0,
-        toolResultTokens: 0,
+        toolResultTokens,
         reservedTokens: this.budgets.reservedTokens,
         pressure,
       },
+    };
+  }
+
+  /** Adds the currently exposed native-tool declaration cost to an existing visible context. */
+  withToolSchemas(context: BuiltContext, toolSchemas: readonly string[]): BuiltContext {
+    const toolSchemaTokens = toolSchemas.reduce((sum, schema) => sum + this.tokenEstimator.estimateText(schema), 0);
+    const usedTokens = context.stats.usedTokens - context.stats.toolSchemaTokens + toolSchemaTokens;
+    const pressure = Math.min(1, (usedTokens + context.stats.reservedTokens) / context.stats.contextLimit);
+    return {
+      ...context,
+      toolSchemas,
+      stats: { ...context.stats, usedTokens, toolSchemaTokens, pressure },
     };
   }
 
