@@ -1,6 +1,15 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import { historyMessageSchema, type HistoryMessage, type HistoryStore, type NewHistoryMessage, type StateStore } from "@mnemos/core";
+import {
+  historyMessageSchema,
+  contextCompactionCheckpointSchema,
+  type ContextCompactionCheckpoint,
+  type ContextCompactionStore,
+  type HistoryMessage,
+  type HistoryStore,
+  type NewHistoryMessage,
+  type StateStore,
+} from "@mnemos/core";
 
 interface StoredMessage {
   id: string;
@@ -14,6 +23,13 @@ interface StoredMessage {
 interface StoredState {
   session_id: string;
   value: string;
+  updated_at: string;
+}
+
+interface StoredCompactionCheckpoint {
+  session_id: string;
+  evicted_through_message_id: string | null;
+  automatic_pin: string | null;
   updated_at: string;
 }
 
@@ -44,6 +60,17 @@ function migrateState(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS working_state (
       session_id TEXT PRIMARY KEY,
       value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+}
+
+function migrateCompaction(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS context_compaction_checkpoints (
+      session_id TEXT PRIMARY KEY,
+      evicted_through_message_id TEXT,
+      automatic_pin TEXT,
       updated_at TEXT NOT NULL
     );
   `);
@@ -134,6 +161,50 @@ export class SqliteStateStore implements StateStore {
   async patch<T extends Record<string, unknown>>(sessionId: string, patch: Partial<T>): Promise<T> {
     const current = await this.get<T>(sessionId);
     return this.set(sessionId, { ...(current ?? {}), ...patch } as T);
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}
+
+/** Durable session cursor and automatic pin for the Phase 2 compaction pipeline. */
+export class SqliteContextCompactionStore implements ContextCompactionStore {
+  private readonly db: Database.Database;
+
+  constructor(filename: string) {
+    this.db = openDatabase(filename);
+    migrateCompaction(this.db);
+  }
+
+  async get(sessionId: string): Promise<ContextCompactionCheckpoint | undefined> {
+    const row = this.db.prepare(`
+      SELECT session_id, evicted_through_message_id, automatic_pin, updated_at
+      FROM context_compaction_checkpoints WHERE session_id = ?
+    `).get(sessionId) as StoredCompactionCheckpoint | undefined;
+    if (!row) return undefined;
+    return contextCompactionCheckpointSchema.parse({
+      sessionId: row.session_id,
+      ...(row.evicted_through_message_id === null ? {} : { evictedThroughMessageId: row.evicted_through_message_id }),
+      ...(row.automatic_pin === null ? {} : { automaticPin: JSON.parse(row.automatic_pin) }),
+      updatedAt: row.updated_at,
+    });
+  }
+
+  async set(checkpoint: ContextCompactionCheckpoint): Promise<void> {
+    this.db.prepare(`
+      INSERT INTO context_compaction_checkpoints (session_id, evicted_through_message_id, automatic_pin, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        evicted_through_message_id = excluded.evicted_through_message_id,
+        automatic_pin = excluded.automatic_pin,
+        updated_at = excluded.updated_at
+    `).run(
+      checkpoint.sessionId,
+      checkpoint.evictedThroughMessageId ?? null,
+      checkpoint.automaticPin === undefined ? null : JSON.stringify(checkpoint.automaticPin),
+      checkpoint.updatedAt,
+    );
   }
 
   close(): void {

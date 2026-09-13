@@ -1,4 +1,5 @@
 export * from "./context.js";
+export * from "./compaction.js";
 export * from "./contracts.js";
 export * from "./events.js";
 export * from "./harness.js";

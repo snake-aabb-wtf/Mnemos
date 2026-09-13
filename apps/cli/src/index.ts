@@ -1,16 +1,20 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { Harness, MockModelProvider } from "@mnemos/core";
-import { SqliteHistoryStore, SqliteStateStore } from "@mnemos/storage";
+import { CompactionService, ContextManager, Harness, MockModelProvider } from "@mnemos/core";
+import { SqliteContextCompactionStore, SqliteHistoryStore, SqliteStateStore } from "@mnemos/storage";
 
 const databasePath = process.env.MNEMOS_DB_PATH ?? "./mnemos.sqlite";
 const sessionId = process.env.MNEMOS_SESSION_ID ?? "default";
 const history = new SqliteHistoryStore(databasePath);
 const state = new SqliteStateStore(databasePath);
+const compactionCheckpoints = new SqliteContextCompactionStore(databasePath);
+const context = new ContextManager();
 const harness = new Harness({
   history,
   state,
+  context,
+  compaction: new CompactionService({ history, checkpoints: compactionCheckpoints, context }),
   provider: new MockModelProvider(({ input }) => ({ content: `Mock: ${input}` })),
 });
 
@@ -31,4 +35,5 @@ try {
   readline.close();
   history.close();
   state.close();
+  compactionCheckpoints.close();
 }

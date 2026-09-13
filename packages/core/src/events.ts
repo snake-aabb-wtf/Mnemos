@@ -1,4 +1,5 @@
 import type { ContextStats } from "./context.js";
+import type { ContextEviction } from "./compaction.js";
 import type { HistoryMessage } from "./contracts.js";
 
 export interface HarnessEventMap {
@@ -10,6 +11,8 @@ export interface HarnessEventMap {
     stats: ContextStats;
     reason: "high" | "emergency";
   };
+  /** Emitted only after an automatic pin and durable compaction checkpoint are updated. */
+  "context.evicted": ContextEviction;
 }
 
 type Listener<T> = (payload: T) => void | Promise<void>;

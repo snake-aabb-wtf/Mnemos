@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { HistoryMessage } from "./contracts.js";
 
 export interface TokenEstimator {
@@ -36,11 +37,20 @@ export const defaultContextBudgets: ContextBudgets = {
   emergencyPressureThreshold: 0.92,
 };
 
-export interface PinnedContext {
-  id: string;
-  content: string;
-  source: "system" | "automatic" | "visible-agent";
-}
+export const pinnedContextSchema = z.object({
+  id: z.string().min(1),
+  content: z.string(),
+  source: z.enum(["system", "automatic", "visible-agent"]),
+  /** Undefined pins apply to every session; automatic pins are always session-scoped. */
+  sessionId: z.string().min(1).optional(),
+  /** Inclusive canonical-history range represented by an automatic pin. */
+  sourceRange: z.object({
+    firstMessageId: z.string().uuid(),
+    lastMessageId: z.string().uuid(),
+    messageCount: z.number().int().positive(),
+  }).optional(),
+});
+export type PinnedContext = z.infer<typeof pinnedContextSchema>;
 
 export interface ContextStats {
   usedTokens: number;
@@ -65,7 +75,7 @@ export class ContextManager {
   readonly budgets: ContextBudgets;
 
   constructor(
-    private readonly estimator: TokenEstimator = new CharacterTokenEstimator(),
+    private readonly tokenEstimator: TokenEstimator = new CharacterTokenEstimator(),
     budgets: Partial<ContextBudgets> = {},
   ) {
     this.budgets = { ...defaultContextBudgets, ...budgets };
@@ -74,30 +84,54 @@ export class ContextManager {
 
   addPin(pin: PinnedContext): void {
     const next = new Map(this.pins);
-    next.set(pin.id, pin);
-    if (this.pinTokens(next.values()) > this.budgets.pinnedTokenBudget) {
+    next.set(this.pinKey(pin), pin);
+    if (this.pinTokens(this.applicablePins(next.values(), pin.sessionId)) > this.budgets.pinnedTokenBudget) {
       throw new Error("Pinned context would exceed its token budget");
     }
-    this.pins.set(pin.id, pin);
+    this.pins.set(this.pinKey(pin), pin);
   }
 
-  removePin(id: string): boolean {
-    return this.pins.delete(id);
+  /** Replaces a pin atomically with respect to the configured token budget. */
+  upsertPin(pin: PinnedContext): PinnedContext | undefined {
+    const previous = this.pins.get(this.pinKey(pin));
+    this.addPin(pin);
+    return previous;
   }
 
-  listPins(): readonly PinnedContext[] {
-    return [...this.pins.values()];
+  removePin(id: string, sessionId?: string): boolean {
+    return this.pins.delete(this.pinKey({ id, sessionId }));
   }
 
-  build(history: readonly HistoryMessage[], systemPrompt = ""): BuiltContext {
+  listPins(sessionId?: string): readonly PinnedContext[] {
+    return [...this.applicablePins(this.pins.values(), sessionId)];
+  }
+
+  getTokenEstimator(): TokenEstimator {
+    return this.tokenEstimator;
+  }
+
+  /** Remaining pin budget for one session, optionally excluding a pin being replaced. */
+  availablePinTokens(sessionId: string, excludingPinId?: string): number {
+    const used = this.pinTokens(this.listPins(sessionId).filter((pin) => pin.id !== excludingPinId));
+    return Math.max(0, this.budgets.pinnedTokenBudget - used);
+  }
+
+  /** Phase 1 compatibility helper: selects recent messages from complete history. */
+  build(history: readonly HistoryMessage[], systemPrompt = "", sessionId = history[0]?.sessionId): BuiltContext {
     const recentMessages = this.selectRecent(history);
-    const systemTokens = this.estimator.estimateText(systemPrompt);
-    const pinnedTokens = this.pinTokens(this.pins.values());
-    const recentRawTokens = recentMessages.reduce((sum, message) => sum + this.estimator.estimateMessage(message), 0);
+    return this.buildVisible(sessionId, recentMessages, systemPrompt);
+  }
+
+  /** Builds a context from an already selected visible working set. */
+  buildVisible(sessionId: string | undefined, recentMessages: readonly HistoryMessage[], systemPrompt = ""): BuiltContext {
+    const pins = this.listPins(sessionId);
+    const systemTokens = this.tokenEstimator.estimateText(systemPrompt);
+    const pinnedTokens = this.pinTokens(pins);
+    const recentRawTokens = recentMessages.reduce((sum, message) => sum + this.tokenEstimator.estimateMessage(message), 0);
     const usedTokens = systemTokens + pinnedTokens + recentRawTokens;
     const pressure = Math.min(1, (usedTokens + this.budgets.reservedTokens) / this.budgets.contextLimit);
     return {
-      pinned: this.listPins(),
+      pinned: pins,
       recentMessages,
       stats: {
         usedTokens,
@@ -117,7 +151,7 @@ export class ContextManager {
     const selected: HistoryMessage[] = [];
     let total = 0;
     for (const message of [...history].reverse()) {
-      const tokens = this.estimator.estimateMessage(message);
+      const tokens = this.tokenEstimator.estimateMessage(message);
       if (selected.length > 0 && total + tokens > this.budgets.recentRawTokenBudget) break;
       selected.push(message);
       total += tokens;
@@ -127,8 +161,18 @@ export class ContextManager {
 
   private pinTokens(pins: Iterable<PinnedContext>): number {
     let total = 0;
-    for (const pin of pins) total += this.estimator.estimateText(pin.content);
+    for (const pin of pins) total += this.tokenEstimator.estimateText(pin.content);
     return total;
+  }
+
+  private *applicablePins(pins: Iterable<PinnedContext>, sessionId?: string): Iterable<PinnedContext> {
+    for (const pin of pins) {
+      if (pin.sessionId === undefined || pin.sessionId === sessionId) yield pin;
+    }
+  }
+
+  private pinKey(pin: Pick<PinnedContext, "id" | "sessionId">): string {
+    return `${pin.sessionId ?? "*"}:${pin.id}`;
   }
 
   private validateBudgets(): void {
