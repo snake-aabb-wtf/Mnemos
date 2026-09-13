@@ -313,7 +313,7 @@ export class SqliteMemoryStore implements MemoryStore {
     for (const value of new Set(values.map((value) => value.trim()))) insert.run(memoryId, value);
   }
 
-  private filters(query: Pick<MemoryListQuery, "types" | "statuses" | "entities" | "tags">, defaultStatuses?: readonly MemoryStatus[]): { clauses: string[]; parameters: unknown[] } {
+  private filters(query: Pick<MemoryListQuery, "types" | "statuses" | "sourceTypes" | "entities" | "tags" | "minimumConfidence" | "before" | "after" | "sessionId">, defaultStatuses?: readonly MemoryStatus[]): { clauses: string[]; parameters: unknown[] } {
     const clauses: string[] = [];
     const parameters: unknown[] = [];
     const statuses = query.statuses ?? defaultStatuses;
@@ -324,6 +324,26 @@ export class SqliteMemoryStore implements MemoryStore {
     if (query.types && query.types.length > 0) {
       clauses.push(`m.type IN (${query.types.map(() => "?").join(", ")})`);
       parameters.push(...query.types);
+    }
+    if (query.sourceTypes && query.sourceTypes.length > 0) {
+      clauses.push(`m.source_type IN (${query.sourceTypes.map(() => "?").join(", ")})`);
+      parameters.push(...query.sourceTypes);
+    }
+    if (query.minimumConfidence !== undefined) {
+      clauses.push("m.confidence >= ?");
+      parameters.push(query.minimumConfidence);
+    }
+    if (query.before !== undefined) {
+      clauses.push("m.created_at <= ?");
+      parameters.push(query.before);
+    }
+    if (query.after !== undefined) {
+      clauses.push("m.created_at >= ?");
+      parameters.push(query.after);
+    }
+    if (query.sessionId !== undefined) {
+      clauses.push("EXISTS (SELECT 1 FROM memory_sources filter_session WHERE filter_session.memory_id = m.id AND filter_session.session_id = ?)");
+      parameters.push(query.sessionId);
     }
     if (query.entities && query.entities.length > 0) {
       clauses.push(`EXISTS (SELECT 1 FROM memory_entities filter_entity WHERE filter_entity.memory_id = m.id AND LOWER(filter_entity.entity) IN (${query.entities.map(() => "?").join(", ")}))`);

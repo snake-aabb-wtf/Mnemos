@@ -7,3 +7,5 @@ export * from "./harness.js";
 export * from "./hidden-agent-policy.js";
 export * from "./model.js";
 export * from "./memory.js";
+export * from "./retrieval.js";
+export * from "./retrieval-eval.js";

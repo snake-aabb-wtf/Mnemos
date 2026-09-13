@@ -15,6 +15,7 @@ import {
   type MemorySourceReference,
 } from "./memory.js";
 import type { ModelProvider } from "./model.js";
+import type { MemoryRetriever } from "./retrieval.js";
 
 const textSchema = z.string().trim().min(1);
 const isoDateSchema = z.string().datetime();
@@ -304,21 +305,6 @@ export class ModelProviderHiddenAgent implements HiddenAgent {
   }
 }
 
-/** Phase 4's retrieval seam. Phase 5 can replace it with hybrid retrieval. */
-export interface MemoryRetriever {
-  retrieve(candidate: HiddenMemoryCandidate): Promise<readonly MemoryRecord[]>;
-}
-
-/** The deliberately simple Phase 4 lexical implementation backed by Phase 3 FTS5. */
-export class LexicalMemoryRetriever implements MemoryRetriever {
-  constructor(private readonly memories: Pick<MemoryService, "search">) {}
-
-  async retrieve(candidate: HiddenMemoryCandidate): Promise<readonly MemoryRecord[]> {
-    const query = candidate.retrievalQuery ?? candidate.entities[0] ?? candidate.content;
-    return (await this.memories.search({ query, limit: 10 })).map((result) => result.memory);
-  }
-}
-
 export type ConsolidationOperation =
   | { kind: "new"; record: MemoryRecord; applied: boolean }
   | { kind: "duplicate"; record: MemoryRecord }
@@ -338,7 +324,8 @@ export interface MemoryConsolidationServiceOptions {
   memories: MemoryService;
   jobs: ConsolidationJobStore;
   hiddenAgent: HiddenAgent;
-  retriever?: MemoryRetriever;
+  /** Required composition dependency; Phase 5 hosts provide HybridMemoryRetriever here. */
+  retriever: MemoryRetriever;
   events?: EventBus<HarnessEventMap>;
   onBackgroundError?: (error: Error) => void;
 }
@@ -352,7 +339,7 @@ export class MemoryConsolidationService {
   private recovered = false;
 
   constructor(private readonly options: MemoryConsolidationServiceOptions) {
-    this.retriever = options.retriever ?? new LexicalMemoryRetriever(options.memories);
+    this.retriever = options.retriever;
   }
 
   /** Subscribes only to durable job creation; no model work runs on the visible lifecycle. */
@@ -417,7 +404,10 @@ export class MemoryConsolidationService {
       this.assertCandidateGrounding(extraction.candidates, job);
       const candidates = await Promise.all(extraction.candidates.map(async (candidate) => ({
         candidate,
-        relatedMemories: await this.retriever.retrieve(candidate),
+        relatedMemories: (await this.retriever.retrieve({
+          query: candidate.retrievalQuery ?? candidate.entities[0] ?? candidate.content,
+          limit: 10,
+        })).map((result) => result.memory),
       })));
       const proposal = consolidationProposalSchema.parse(await this.options.hiddenAgent.reconcile({ ...request, candidates }));
       this.assertProposalGrounding(proposal, job);
@@ -523,7 +513,10 @@ export class MemoryConsolidationService {
   private async applyNew(job: ConsolidationJob, index: number, candidate: HiddenMemoryCandidate): Promise<ConsolidationOperation> {
     const id = deterministicMemoryId(job.deduplicationKey, `new:${index}`);
     const existing = await this.options.memories.get(id);
-    if (existing) return { kind: "new", record: existing, applied: false };
+    if (existing) {
+      await this.options.memories.refreshIndexes(existing.id);
+      return { kind: "new", record: existing, applied: false };
+    }
     const record = await this.options.memories.create({
       id,
       type: candidate.type,
@@ -574,6 +567,8 @@ export class MemoryConsolidationService {
       if (previous.supersededBy !== replacementId) throw new Error(`Memory ${previous.id} has already been superseded by a different record`);
       const replacement = await this.options.memories.get(replacementId);
       if (!replacement) throw new Error(`Superseding Memory ${replacementId} is missing`);
+      await this.options.memories.refreshIndexes(previous.id);
+      await this.options.memories.refreshIndexes(replacement.id);
       return { kind: "supersede", superseded: previous, replacement, applied: false };
     }
     if (previous.status === "archived") throw new Error(`Archived Memory cannot be superseded: ${previous.id}`);

@@ -4,10 +4,10 @@ Mnemos is a TypeScript cognitive-harness runtime. Its architectural direction an
 
 ## Current status
 
-**Phase 4 — Hidden Agent Consolidation is implemented.** The project currently provides:
+**Phase 5 — Hybrid Memory Retrieval is implemented.** The project currently provides:
 
-- `@mnemos/core`: `Harness`, separate Visible and Hidden Agent abstractions over replaceable `ModelProvider`s, context accounting, session-aware pinned context, an in-process event bus, compaction, memory, consolidation, and retrieval contracts.
-- `@mnemos/storage`: SQLite-backed append-only `HistoryStore`, separate mutable `StateStore`, durable compaction checkpoints, a SQLite/FTS5 `MemoryStore`, and a durable consolidation-job queue.
+- `@mnemos/core`: `Harness`, separate Visible and Hidden Agent abstractions over replaceable `ModelProvider` / `EmbeddingProvider` interfaces, context accounting, memory consolidation, and hybrid retrieval / evaluation contracts.
+- `@mnemos/storage`: SQLite-backed append-only `HistoryStore`, separate mutable `StateStore`, durable compaction checkpoints, SQLite/FTS5 Memory, a durable consolidation-job queue, and a rebuildable local vector index.
 - `@mnemos/cli`: an interactive, persistent chat shell using the mock provider.
 
 The runtime emits `message.received`, `message.generated`, `context.pressure`, `context.compaction.requested`, `context.evicted`, and the `memory.consolidation.*` / `memory.*` lifecycle events.
@@ -66,7 +66,32 @@ stop();
 
 Memory lifecycle events are emitted only around completed state transitions. Subscriber exceptions are caught by the consolidation service and cannot roll back or partially complete a Memory transaction.
 
-Not implemented yet: embeddings/vector or hybrid retrieval, reranking, artifacts, tool runtime/discovery, memory decay, entity-graph reasoning, and PTC. These remain intentionally reserved for Phases 5–9.
+## Hybrid Memory Retrieval
+
+`MemoryRetriever` is now the single upper-layer API. It accepts a query plus optional type, status, source-type, entity, tag, confidence, time-range, and source-session filters, and returns explainable `MemoryRetrievalResult` entries:
+
+```text
+query normalization
+  ├─ FTS5 lexical candidates
+  ├─ local vector semantic candidates
+  └─ entity candidates
+        ↓
+metadata filtering → reciprocal-rank fusion → deterministic reranker → Top K
+```
+
+`HybridMemoryRetriever` deliberately fuses ranks with Reciprocal Rank Fusion rather than adding incompatible FTS5 BM25 and cosine-similarity scales. Results expose lexical, semantic, entity, recency, confidence, and status signals together with `matchedBy` reasons. Current-fact queries default to `active`; callers must explicitly request `superseded` records for historical queries.
+
+`EmbeddingProvider` is independent of `ModelProvider`. `DeterministicEmbeddingProvider` is supplied for offline tests; production hosts can supply OpenAI, Gemini, Voyage, Jina, local, or OpenAI-compatible adapters without changing Core.
+
+`MemoryEmbeddingIndexer` is attached to `MemoryService` as a derived-index lifecycle hook. Creation and content updates embed; metadata-only updates reuse the prior vector; supersession refreshes index metadata for both records. Every vector record stores model/version, dimensions, content hash, and retrieval metadata. `indexer.rebuild()` replaces the index from canonical Memory, so the index is never a source of truth.
+
+Hosts construct `HybridMemoryRetriever` with their `EmbeddingProvider` and `MemoryVectorStore`, then inject it into `MemoryConsolidationService`. Consolidation itself is unchanged: it receives ranked records through `MemoryRetriever` and continues to own only proposal validation and canonical Memory transitions.
+
+The current local backend is `SqliteMemoryVectorStore`. `sqlite-vec` is not installed as a compatible `better-sqlite3` extension in this workspace, so Phase 5 uses a reliable SQLite metadata table with persisted normalized vectors and Top-K vector-ID retrieval. It scans derived vectors—not canonical Memory rows—and hydrates only fused candidates. A future sqlite-vec adapter can implement the same `MemoryVectorStore` contract.
+
+Phase 4 consolidation accepts this same retriever unchanged. The fixed Phase 5 evaluation fixture covers exact lexical match, semantic paraphrase, symbols, entity retrieval, current vs historical facts, and confidence; its deterministic tests compute Recall@K, Hit@K, and MRR.
+
+Not implemented yet: Artifact Store, tool runtime/discovery, PTC, memory decay, entity-graph reasoning, and distributed retrieval. These remain intentionally reserved for Phases 6–9.
 
 ## Requirements
 
@@ -80,11 +105,12 @@ pnpm install
 pnpm build
 pnpm typecheck
 pnpm test
+pnpm eval:retrieval
 pnpm chat
 ```
 
 `pnpm chat` stores data in `./mnemos.sqlite` by default. Set `MNEMOS_DB_PATH` and `MNEMOS_SESSION_ID` to choose the database location and conversation session.
 
-## Phase 5 extension points
+## Phase 6 extension points
 
-`MemoryRetriever` is the replacement boundary for Phase 5. Phase 4's `LexicalMemoryRetriever` uses the existing FTS5 search, while a hybrid vector/lexical retriever can implement the same interface without changing the Hidden Agent, job lifecycle, source grounding, or Memory write path.
+Phase 6 can add Artifact storage without changing retrieval or consolidation boundaries. `MemoryVectorStore`, `EmbeddingProvider`, and `MemoryReranker` remain independently replaceable for future sqlite-vec, external model, cross-encoder, or larger-scale adapters.

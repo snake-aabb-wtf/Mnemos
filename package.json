@@ -12,6 +12,7 @@
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
+    "eval:retrieval": "vitest run packages/storage/src/retrieval.test.ts",
     "chat": "pnpm --filter @mnemos/cli start"
   },
   "devDependencies": {

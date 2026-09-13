@@ -8,6 +8,7 @@ import {
   ContextManager,
   EventBus,
   Harness,
+  LexicalMemoryRetriever,
   MemoryConsolidationService,
   MemoryService,
   MockModelProvider,
@@ -122,7 +123,7 @@ async function runtime(path: string, hiddenAgent: HiddenAgent, events?: EventBus
   const store = new SqliteMemoryStore(path);
   const jobs = new SqliteConsolidationJobStore(path);
   const memories = new MemoryService(store, history);
-  const consolidation = new MemoryConsolidationService({ history, memories, jobs, hiddenAgent, events });
+  const consolidation = new MemoryConsolidationService({ history, memories, jobs, hiddenAgent, retriever: new LexicalMemoryRetriever(memories), events });
   return { history, store, jobs, memories, consolidation };
 }
 

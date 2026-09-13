@@ -103,19 +103,31 @@ export const memorySearchQuerySchema = z.object({
   query: nonEmptyTextSchema,
   types: z.array(memoryTypeSchema).min(1).optional(),
   statuses: z.array(memoryStatusSchema).min(1).optional(),
+  sourceTypes: z.array(memorySourceTypeSchema).min(1).optional(),
   entities: z.array(nonEmptyTextSchema).min(1).optional(),
   tags: z.array(nonEmptyTextSchema).min(1).optional(),
+  minimumConfidence: z.number().min(0).max(1).optional(),
+  before: z.string().datetime().optional(),
+  after: z.string().datetime().optional(),
+  /** Restricts results to memories with at least one source in this session. */
+  sessionId: nonEmptyTextSchema.optional(),
   limit: z.number().int().min(1).max(100).default(10),
-});
+}).refine((query) => query.before === undefined || query.after === undefined || query.before >= query.after, "before must be at or after after");
 export type MemorySearchQuery = z.input<typeof memorySearchQuerySchema>;
 
 export const memoryListQuerySchema = z.object({
   types: z.array(memoryTypeSchema).min(1).optional(),
   statuses: z.array(memoryStatusSchema).min(1).optional(),
+  sourceTypes: z.array(memorySourceTypeSchema).min(1).optional(),
   entities: z.array(nonEmptyTextSchema).min(1).optional(),
   tags: z.array(nonEmptyTextSchema).min(1).optional(),
-  limit: z.number().int().min(1).max(500).default(100),
-});
+  minimumConfidence: z.number().min(0).max(1).optional(),
+  before: z.string().datetime().optional(),
+  after: z.string().datetime().optional(),
+  sessionId: nonEmptyTextSchema.optional(),
+  /** Rebuilds may read more than the interactive default, but callers must opt in. */
+  limit: z.number().int().min(1).max(20_000).default(100),
+}).refine((query) => query.before === undefined || query.after === undefined || query.before >= query.after, "before must be at or after after");
 export type MemoryListQuery = z.input<typeof memoryListQuerySchema>;
 
 export const memoryTimelineQuerySchema = z.object({
@@ -144,6 +156,13 @@ export interface MemoryStore {
   timeline(query: MemoryTimelineQuery): Promise<MemoryRecord[]>;
 }
 
+/** A derived-index hook. Index failures never alter History, and every index can be rebuilt from MemoryStore. */
+export interface MemoryIndexMaintainer {
+  onCreated(memory: MemoryRecord): Promise<void>;
+  onUpdated(memory: MemoryRecord): Promise<void>;
+  onSuperseded(relation: { superseded: MemoryRecord; replacement: MemoryRecord }): Promise<void>;
+}
+
 export class MemoryNotFoundError extends Error {
   constructor(id: string) {
     super(`Memory not found: ${id}`);
@@ -168,13 +187,19 @@ export interface MemorySourceTrace {
  * has no event subscription: Phase 4 owns automated eviction consolidation.
  */
 export class MemoryService {
-  constructor(private readonly memories: MemoryStore, private readonly history: HistoryStore) {}
+  constructor(
+    private readonly memories: MemoryStore,
+    private readonly history: HistoryStore,
+    private readonly indexMaintainer?: MemoryIndexMaintainer,
+  ) {}
 
   async create(input: MemoryCreateInput): Promise<MemoryRecord> {
     const parsed = memoryCreateInputSchema.parse(input);
     const id = parsed.id ?? randomUUID();
     await this.assertSourcesExist(parsed.sourceReferences, id);
-    return this.memories.create({ ...parsed, id });
+    const record = await this.memories.create({ ...parsed, id });
+    await this.indexMaintainer?.onCreated(record);
+    return record;
   }
 
   get(id: string): Promise<MemoryRecord | undefined> {
@@ -185,11 +210,22 @@ export class MemoryService {
     return this.memories.getMany(ids.map((id) => memoryIdSchema.parse(id)));
   }
 
+  /** Retries a derived-index update after a prior provider/index failure without mutating canonical Memory. */
+  async refreshIndexes(id: string): Promise<MemoryRecord> {
+    const memoryId = memoryIdSchema.parse(id);
+    const record = await this.memories.get(memoryId);
+    if (!record) throw new MemoryNotFoundError(memoryId);
+    await this.indexMaintainer?.onUpdated(record);
+    return record;
+  }
+
   async update(id: string, update: MemoryUpdateInput): Promise<MemoryRecord> {
     const memoryId = memoryIdSchema.parse(id);
     const parsed = memoryUpdateInputSchema.parse(update);
     if (parsed.sourceReferences !== undefined) await this.assertSourcesExist(parsed.sourceReferences, memoryId);
-    return this.memories.update(memoryId, parsed);
+    const record = await this.memories.update(memoryId, parsed);
+    await this.indexMaintainer?.onUpdated(record);
+    return record;
   }
 
   list(query?: MemoryListQuery): Promise<MemoryRecord[]> {
@@ -204,8 +240,10 @@ export class MemoryService {
     return this.memories.timeline(memoryTimelineQuerySchema.parse(query));
   }
 
-  supersede(supersededId: string, replacementId: string): Promise<{ superseded: MemoryRecord; replacement: MemoryRecord }> {
-    return this.memories.supersede(memoryIdSchema.parse(supersededId), memoryIdSchema.parse(replacementId));
+  async supersede(supersededId: string, replacementId: string): Promise<{ superseded: MemoryRecord; replacement: MemoryRecord }> {
+    const relation = await this.memories.supersede(memoryIdSchema.parse(supersededId), memoryIdSchema.parse(replacementId));
+    await this.indexMaintainer?.onSuperseded(relation);
+    return relation;
   }
 
   async source(id: string): Promise<MemorySourceTrace> {
