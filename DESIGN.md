@@ -1552,13 +1552,19 @@ Agent 默认只加载核心 Tool Set。
 
 ```text
 tool metadata index
-tool semantic search
+deterministic lexical search (semantic ranking may be added behind the same interface)
 schema on demand
 ```
 
 ## Phase 9 DoD
 
 即使 Harness 安装 500+ 工具，主 Agent 初始 prompt 也不需要包含全部 schemas。
+
+Phase 9 的发现入口仍是正式 `ToolDefinition`，并且必须经过 `ToolDispatcher`。`ToolRegistry` 是唯一的定义来源；可重建的 `ToolDiscoveryIndex` 只保存派生元数据和稳定 schema fingerprint。`tools.search` 只返回有界候选元数据，`tools.describe` 按需返回完整 JSON Schema 并加载 session-scoped `LoadedToolSet`。
+
+Loaded Tool Set 具有核心工具白名单、动态工具数量上限、schema token budget、结果字节上限和确定性的 LRU 驱逐。Native、PTC、both 三种模式都只能看到当前快照；PTC SDK 从同一 Registry 快照生成，任何子调用仍由 Dispatcher 做权限和 catalog gate 检查。Discovery 状态变化通过 `tool.discovery.*`、`tool.loaded` 和 `tool.unloaded` 事件记录，不能把完整 schema 或中间结果写入模型可见 History。
+
+首版搜索故意采用可解释的 lexical ranking，不要求 embedding、MCP 或外部连接器；这些能力可以在不改变 `ToolDiscoveryIndex.search` / `ToolDiscoveryRuntime.describe` 契约的情况下后续增加。
 
 ---
 

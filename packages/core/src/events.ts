@@ -83,6 +83,23 @@ export interface HarnessEventMap {
     status: "error";
     errorCode: string;
   };
+  "tool.discovery.searched": {
+    sessionId: string;
+    agentId: string;
+    query: string;
+    candidateCount: number;
+    durationMs: number;
+  };
+  "tool.discovery.described": {
+    sessionId: string;
+    agentId: string;
+    names: readonly string[];
+    loadedNames: readonly string[];
+    schemaTokenEstimate: number;
+    durationMs: number;
+  };
+  "tool.loaded": { sessionId: string; agentId: string; toolNames: readonly string[]; schemaTokenEstimate: number };
+  "tool.unloaded": { sessionId: string; agentId: string; toolNames: readonly string[]; reason: "lru" | "budget" | "registry" };
 }
 
 type Listener<T> = (payload: T) => void | Promise<void>;

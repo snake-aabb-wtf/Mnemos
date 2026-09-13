@@ -4,13 +4,13 @@ Mnemos is a TypeScript cognitive-harness runtime. Its architectural direction an
 
 ## Current status
 
-**Phase 8 — Programmatic Tool Calling is implemented.** The project currently provides:
+**Phase 9 — Dynamic Tool Discovery is implemented.** The project currently provides:
 
 - `@mnemos/core`: `Harness`, separate Visible and Hidden Agent abstractions over replaceable `ModelProvider` / `EmbeddingProvider` interfaces, context accounting, memory consolidation, hybrid retrieval / evaluation contracts, Artifact / spill contracts, and a provider-neutral Tool Runtime.
 - `@mnemos/storage`: SQLite-backed append-only `HistoryStore`, separate mutable `StateStore`, durable compaction checkpoints, SQLite/FTS5 Memory, a durable consolidation-job queue, a rebuildable local vector index, and SQLite metadata plus filesystem-backed Artifacts.
 - `@mnemos/cli`: an interactive, persistent chat shell using the mock provider.
 
-The runtime emits `message.received`, `message.generated`, `context.pressure`, `context.compaction.requested`, `context.evicted`, the `memory.consolidation.*` / `memory.*` lifecycle events, compact `tool.*` lifecycle events, and compact `ptc.started` / `ptc.completed` / `ptc.failed` lifecycle events.
+The runtime emits `message.received`, `message.generated`, `context.pressure`, `context.compaction.requested`, `context.evicted`, the `memory.consolidation.*` / `memory.*` lifecycle events, compact `tool.*` lifecycle events, compact `ptc.started` / `ptc.completed` / `ptc.failed` lifecycle events, and `tool.discovery.searched`, `tool.discovery.described`, `tool.loaded`, and `tool.unloaded` discovery events.
 
 ## Context compaction
 
@@ -166,7 +166,27 @@ Register it explicitly in a host composition root:
       },
     });
 
-Not implemented yet: dynamic tool discovery, semantic tool search, MCP/external connectors, browser or shell host access, a production sandbox fleet, memory decay, entity-graph reasoning, and distributed retrieval. These remain intentionally reserved for Phases 9 and later.
+## Dynamic Tool Discovery
+
+Phase 9 adds a metadata index and a bounded, session-scoped loaded-tool set. Discovery is a normal part of the same runtime boundary:
+
+```text
+Visible Agent → ToolDispatcher → tools.search / tools.describe
+             → ToolDiscoveryIndex → LoadedToolSet
+             → native declarations or filtered PTC SDK → ToolDispatcher
+```
+
+`ToolRegistry` remains the canonical source of definitions. `ToolDiscoveryIndex` is a rebuildable lexical index derived from the Registry; registration, update, and removal notifications keep it current, while `toolSchemaHash` provides a stable short fingerprint for snapshots and audit metadata. Metadata such as namespace, summary, tags, capabilities, provider, version, visibility, permissions, side effects, and concurrency hints is authored on `ToolDefinition` and exported to both native and PTC surfaces—there is no second discovery contract.
+
+`registerToolDiscoveryTools(registry, discovery)` registers the formal `tools.search` and `tools.describe` definitions. Both go through `ToolDispatcher`, require the host-granted `tools:read` permission, and return bounded structured results. Search is deterministic lexical ranking (exact name/namespace, token, tag, capability, and description signals) with namespace/capability/side-effect/provider filters. Describe returns complete JSON schemas only for selected, permission-available tools and loads them into the current session.
+
+`ToolExposurePolicy` controls the core catalog, maximum dynamic tools, schema-token budget, result bytes, and describe batch size. Core tools are always preferred; dynamic schemas are loaded only after describe and are evicted deterministically by LRU when count or budget limits are reached. A request receives a stable declaration snapshot. A later Registry mutation affects later snapshots, while a stale or unloaded call is still rejected by `ToolDispatcher` with `tool_not_found`.
+
+With `Harness.toolRuntime.discovery`, native mode exposes the core plus loaded dynamic schemas (and never the whole Registry). In `ptc` mode the model still sees `run_code` and discovery tools, while `PtcSdkGenerator` receives only the current host-selected catalog. `both` keeps both surfaces. Permission visibility is advisory in search (unavailable candidates are marked) and authoritative in `tools.describe`, the Dispatcher, and PTC RPC; generated arguments, forged identities, and raw RPC fields cannot grant access.
+
+Discovery state is process-local and session-scoped. Search/describe outputs and discovery events contain bounded metadata and schema hashes, not large tool results. Full schemas count against Context through the existing schema accounting. Internal tool calls remain in audit/history as ordinary tool calls; they are not silently injected as extra model turns.
+
+Phase 9 intentionally remains lexical and local. It does not add semantic embeddings, MCP, `tools.describe`-style dynamic external connectors, browser/shell access, or a production distributed sandbox. Those are later roadmap work (including the Phase 13 production PTC backend).
 
 ## Requirements
 
@@ -182,11 +202,12 @@ pnpm typecheck
 pnpm test
 pnpm eval:retrieval
 pnpm eval:ptc
+pnpm eval:tools
 pnpm chat
 ```
 
 `pnpm chat` stores data in `./mnemos.sqlite` by default. Set `MNEMOS_DB_PATH` and `MNEMOS_SESSION_ID` to choose the database location and conversation session. The CLI intentionally remains a minimal mock chat host; embedders enable the native tool loop by supplying `ToolRegistry`, `ToolDispatcher`, and host-granted permissions to `Harness`.
 
-## Phase 9 extension points
+## Phase 10 extension points
 
-Phase 9 must build Dynamic Tool Discovery on existing Registry descriptors and PtcSdkGenerator, without creating a second contract or exposing raw implementations. PtcSandbox, PtcRuntime, ToolExecutionMode, versioned PTC policy instructions, and Context schema accounting are the Phase 8 boundaries available to the next phase. MemoryVectorStore, EmbeddingProvider, and MemoryReranker remain independently replaceable for future sqlite-vec, external model, cross-encoder, or larger-scale adapters.
+Dynamic discovery leaves the following stable boundaries for the next phase: `ToolDiscoveryIndex.search`, `ToolDiscoveryRuntime.describe`, `LoadedToolSet` snapshots and lifecycle, schema hashes, `PtcSdkGenerator.describe(allowedToolNames)`, and the existing `ToolDispatcher` permission gate. Semantic discovery, provider-backed ranking, or remote catalog adapters can be added behind these contracts without exposing implementations or changing native/PTC execution semantics. `MemoryVectorStore`, `EmbeddingProvider`, and `MemoryReranker` remain independently replaceable for future retrieval scale.

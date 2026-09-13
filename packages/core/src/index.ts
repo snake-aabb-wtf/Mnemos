@@ -1,6 +1,7 @@
 export * from "./context.js";
 export * from "./artifact.js";
 export * from "./tool.js";
+export * from "./tool-discovery.js";
 export * from "./ptc.js";
 export * from "./cognitive-tools.js";
 export * from "./compaction.js";

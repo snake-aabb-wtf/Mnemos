@@ -5,6 +5,7 @@ import type { HistoryMessage, HistoryStore, StateStore } from "./contracts.js";
 import { EventBus, type HarnessEventMap } from "./events.js";
 import { VisibleAgent, type ModelProvider, type ModelToolCall } from "./model.js";
 import { ToolDispatcher, ToolRegistry, type ToolDispatchContext, type ToolPermission } from "./tool.js";
+import { type ToolDiscoveryRuntime } from "./tool-discovery.js";
 import { ptcModelInstructions, runCodeToolName, type PtcRuntime, type ToolExecutionMode } from "./ptc.js";
 
 export interface HarnessToolRuntimeOptions {
@@ -19,6 +20,8 @@ export interface HarnessToolRuntimeOptions {
   executionMode?: ToolExecutionMode;
   /** Required whenever PTC is exposed to the Visible Agent. */
   ptc?: PtcRuntime;
+  /** Optional Phase 9 dynamic discovery catalog and session-scoped loaded set. */
+  discovery?: ToolDiscoveryRuntime;
 }
 
 export interface HarnessOptions {
@@ -41,9 +44,9 @@ export class Harness {
   private readonly logger: Logger;
   private readonly systemPrompt: string;
   private readonly compaction: CompactionService;
-  private readonly toolRuntime?: Required<Omit<HarnessToolRuntimeOptions, "registry" | "dispatcher" | "ptc" | "executionMode">>
+  private readonly toolRuntime?: Required<Omit<HarnessToolRuntimeOptions, "registry" | "dispatcher" | "ptc" | "executionMode" | "discovery">>
     & Pick<HarnessToolRuntimeOptions, "registry" | "dispatcher" | "ptc">
-    & { executionMode: ToolExecutionMode };
+    & { executionMode: ToolExecutionMode; discovery?: ToolDiscoveryRuntime };
 
   constructor(private readonly options: HarnessOptions) {
     this.context = options.context ?? new ContextManager();
@@ -72,6 +75,7 @@ export class Harness {
         maxToolIterations,
         executionMode,
         ...(options.toolRuntime.ptc === undefined ? {} : { ptc: options.toolRuntime.ptc }),
+        ...(options.toolRuntime.discovery === undefined ? {} : { discovery: options.toolRuntime.discovery }),
       };
     }
     this.logger = options.logger ?? pino({ name: "mnemos" });
@@ -91,7 +95,7 @@ export class Harness {
         sessionId,
         input: content,
         context: prepared.context,
-        ...(this.toolRuntime === undefined ? {} : { tools: this.modelTools(), runtimeInstructions: this.runtimeInstructions() }),
+        ...(this.toolRuntime === undefined ? {} : { tools: this.modelTools(sessionId), runtimeInstructions: this.runtimeInstructions(sessionId) }),
       });
       if (response.kind !== "tool-calls") {
         const generated = await this.appendAssistant(sessionId, response.content, response.metadata);
@@ -131,7 +135,7 @@ export class Harness {
   }
 
   private async prepareContext(sessionId: string): Promise<CompactionPreparation> {
-    return this.compaction.prepare(sessionId, this.systemPrompt, this.toolSchemaTexts());
+    return this.compaction.prepare(sessionId, this.systemPrompt, this.toolSchemaTexts(sessionId));
   }
 
   private async executeToolCalls(sessionId: string, calls: readonly ModelToolCall[]): Promise<void> {
@@ -141,6 +145,7 @@ export class Harness {
       agentId: this.toolRuntime.agentId,
       principal: this.toolRuntime.principal,
       grantedPermissions: this.toolRuntime.grantedPermissions,
+      allowedToolNames: this.dispatchableToolNames(sessionId),
     };
     for (const call of calls) {
       const transactionId = typeof call.id === "string" && call.id.length > 0 ? call.id : "invalid-tool-call";
@@ -178,25 +183,32 @@ export class Harness {
     return generated;
   }
 
-  private toolSchemaTexts(): readonly string[] {
+  private toolSchemaTexts(sessionId: string): readonly string[] {
     if (!this.toolRuntime) return [];
     return [
-      ...this.modelTools().map((declaration) => JSON.stringify(declaration)),
-      ...this.runtimeInstructions(),
+      ...this.modelTools(sessionId).map((declaration) => JSON.stringify(declaration)),
+      ...this.runtimeInstructions(sessionId),
     ];
   }
 
-  private modelTools() {
+  private modelTools(sessionId: string) {
     if (!this.toolRuntime) return [];
-    const declarations = this.toolRuntime.registry.nativeDeclarations();
+    const declarations = this.toolRuntime.discovery?.declarations(sessionId, this.toolRuntime.grantedPermissions)
+      ?? this.toolRuntime.registry.nativeDeclarations();
     if (this.toolRuntime.executionMode === "native") return declarations.filter((tool) => tool.name !== runCodeToolName);
     if (this.toolRuntime.executionMode === "ptc") return declarations.filter((tool) => tool.name === runCodeToolName);
     return declarations;
   }
 
-  private runtimeInstructions(): readonly string[] {
+  private dispatchableToolNames(sessionId: string): readonly import("./tool.js").ToolName[] {
+    if (!this.toolRuntime) return [];
+    return this.toolRuntime.discovery?.dispatchableNames(sessionId, this.toolRuntime.grantedPermissions)
+      ?? this.toolRuntime.registry.list().map((tool) => tool.name);
+  }
+
+  private runtimeInstructions(sessionId: string): readonly string[] {
     if (!this.toolRuntime || this.toolRuntime.executionMode === "native" || this.toolRuntime.ptc === undefined) return [];
-    return ptcModelInstructions(this.toolRuntime.ptc.sdkDescription());
+    return ptcModelInstructions(this.toolRuntime.ptc.sdkDescription(this.dispatchableToolNames(sessionId)));
   }
 
   private historyToolCallContent(call: ModelToolCall): string {

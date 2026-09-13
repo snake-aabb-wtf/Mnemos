@@ -23,6 +23,12 @@ export type ToolSideEffect = z.infer<typeof toolSideEffectSchema>;
 export interface ToolMetadata {
   name: ToolName;
   description: string;
+  shortSummary?: string;
+  tags?: readonly string[];
+  capabilities?: readonly string[];
+  provider?: string;
+  version?: string;
+  visibility?: "agent" | "internal";
   requiredPermissions: readonly ToolPermission[];
   sideEffect: ToolSideEffect;
   /** Phase 8 can use this metadata as a concurrency/barrier hint. */
@@ -37,6 +43,7 @@ export interface ToolExecutionContext {
   readonly agentId: string;
   readonly principal: string;
   readonly grantedPermissions: readonly ToolPermission[];
+  readonly allowedToolNames?: readonly ToolName[];
   /** Cooperative cancellation signal; tools should stop promptly when aborted. */
   readonly signal: AbortSignal;
 }
@@ -67,19 +74,43 @@ export interface ToolDescriptor extends ToolMetadata {
   outputSchema?: ToolJsonSchema;
 }
 
+export type ToolRegistryChange = {
+  kind: "registered" | "updated" | "unregistered";
+  name: ToolName;
+};
+
 /** Registry owns available definitions only; it never executes them. */
 export class ToolRegistry {
   private readonly definitions = new Map<ToolName, RegisteredToolDefinition>();
+  private readonly listeners = new Set<(change: ToolRegistryChange) => void>();
 
   register<TInput, TOutput>(definition: ToolDefinition<TInput, TOutput>): void {
     this.validateDefinition(definition);
     const name = toolNameSchema.parse(definition.name);
     if (this.definitions.has(name)) throw new Error(`Tool already registered: ${name}`);
     this.definitions.set(name, definition as unknown as RegisteredToolDefinition);
+    this.notify({ kind: "registered", name });
+  }
+
+  update<TInput, TOutput>(name: string, definition: ToolDefinition<TInput, TOutput>): void {
+    const parsedName = toolNameSchema.parse(name);
+    if (definition.name !== parsedName) throw new Error(`Updated tool name must remain ${parsedName}`);
+    this.validateDefinition(definition);
+    if (!this.definitions.has(parsedName)) throw new Error(`Tool is not registered: ${parsedName}`);
+    this.definitions.set(parsedName, definition as unknown as RegisteredToolDefinition);
+    this.notify({ kind: "updated", name: parsedName });
   }
 
   unregister(name: string): boolean {
-    return this.definitions.delete(toolNameSchema.parse(name));
+    const parsedName = toolNameSchema.parse(name);
+    const removed = this.definitions.delete(parsedName);
+    if (removed) this.notify({ kind: "unregistered", name: parsedName });
+    return removed;
+  }
+
+  subscribe(listener: (change: ToolRegistryChange) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   get(name: string): RegisteredToolDefinition | undefined {
@@ -104,6 +135,12 @@ export class ToolRegistry {
     return {
       name: definition.name,
       description: definition.description,
+      ...(definition.shortSummary === undefined ? {} : { shortSummary: definition.shortSummary }),
+      ...(definition.tags === undefined ? {} : { tags: [...definition.tags] }),
+      ...(definition.capabilities === undefined ? {} : { capabilities: [...definition.capabilities] }),
+      ...(definition.provider === undefined ? {} : { provider: definition.provider }),
+      ...(definition.version === undefined ? {} : { version: definition.version }),
+      visibility: definition.visibility ?? "agent",
       requiredPermissions: [...definition.requiredPermissions],
       sideEffect: definition.sideEffect,
       concurrencySafe: definition.concurrencySafe,
@@ -113,9 +150,22 @@ export class ToolRegistry {
     };
   }
 
+  private notify(change: ToolRegistryChange): void {
+    for (const listener of this.listeners) {
+      try { listener(change); } catch { /* explicit rebuild remains available */ }
+    }
+  }
+
   private validateDefinition(definition: ToolDefinition): void {
     toolNameSchema.parse(definition.name);
     if (definition.description.trim().length === 0) throw new Error("Tool descriptions cannot be empty");
+    if (definition.shortSummary !== undefined && definition.shortSummary.trim().length === 0) throw new Error(`Tool ${definition.name} shortSummary cannot be empty`);
+    for (const values of [definition.tags, definition.capabilities]) {
+      if (values !== undefined && values.some((value) => value.trim().length === 0)) throw new Error(`Tool ${definition.name} metadata cannot contain empty values`);
+    }
+    if (definition.provider !== undefined && definition.provider.trim().length === 0) throw new Error(`Tool ${definition.name} provider cannot be empty`);
+    if (definition.version !== undefined && definition.version.trim().length === 0) throw new Error(`Tool ${definition.name} version cannot be empty`);
+    if (definition.visibility !== undefined && definition.visibility !== "agent" && definition.visibility !== "internal") throw new Error(`Tool ${definition.name} visibility is invalid`);
     if (typeof definition.inputSchema?.safeParse !== "function") throw new Error(`Tool ${definition.name} requires a Zod input schema`);
     if (definition.outputSchema !== undefined && typeof definition.outputSchema.safeParse !== "function") {
       throw new Error(`Tool ${definition.name} outputSchema must be a Zod schema`);
@@ -192,6 +242,8 @@ export interface ToolDispatchContext {
   principal: string;
   /** Supplied by the host/runtime, never by model-generated ToolCall arguments. */
   grantedPermissions: readonly ToolPermission[];
+  /** Optional request-scoped catalog gate. Generated/native calls cannot expand it. */
+  allowedToolNames?: readonly ToolName[];
 }
 
 export interface ToolOutputPolicy {
@@ -300,6 +352,11 @@ export class ToolDispatcher {
         code: "tool_not_found", message: `Unknown tool: ${call.name}.`, retryable: false,
       });
     }
+    if (context.allowedToolNames !== undefined && !context.allowedToolNames.includes(call.name)) {
+      return this.failure(call.id, call.name, context, startedAt, startedMs, {
+        code: "tool_not_found", message: `Tool is not loaded: ${call.name}.`, retryable: false,
+      });
+    }
     if (!this.isPermitted(tool, context)) {
       const result = await this.failure(call.id, call.name, context, startedAt, startedMs, {
         code: "permission_denied", message: "This tool is not permitted for the current principal.", retryable: false,
@@ -383,6 +440,7 @@ export class ToolDispatcher {
           agentId: context.agentId,
           principal: context.principal,
           grantedPermissions: [...context.grantedPermissions],
+          allowedToolNames: context.allowedToolNames,
           signal: controller.signal,
         })),
         timeout,

@@ -165,9 +165,10 @@ export interface PtcSdkDescription {
 export class PtcSdkGenerator {
   constructor(private readonly registry: ToolRegistry) {}
 
-  describe(): PtcSdkDescription {
+  describe(allowedToolNames?: readonly string[]): PtcSdkDescription {
+    const allowed = allowedToolNames === undefined ? undefined : new Set(allowedToolNames);
     const tools = this.registry.list()
-      .filter((tool) => tool.name !== runCodeToolName)
+      .filter((tool) => tool.name !== runCodeToolName && (allowed === undefined || allowed.has(tool.name)))
       .map((tool) => ({
         name: tool.name,
         description: tool.description,
@@ -647,8 +648,8 @@ export class PtcRuntime {
     this.sandbox = options.sandbox ?? new NodeProcessPtcSandbox();
   }
 
-  sdkDescription(): PtcSdkDescription {
-    return this.sdk.describe();
+  sdkDescription(allowedToolNames?: readonly string[]): PtcSdkDescription {
+    return this.sdk.describe(allowedToolNames);
   }
 
   async execute(rawInput: RunCodeInput, context: ToolExecutionContext): Promise<PtcExecutionResult> {
@@ -685,9 +686,10 @@ export class PtcRuntime {
       // Copied only from host-issued execution context. The child protocol
       // never accepts identity or permission fields.
       grantedPermissions: context.grantedPermissions,
+      allowedToolNames: context.allowedToolNames,
     };
     const scheduler = new PtcToolScheduler(this.options.registry, this.options.dispatcher, dispatchContext, effectivePolicy, executionId);
-    const sdk = this.sdkDescription();
+    const sdk = this.sdkDescription(context.allowedToolNames);
     await this.emit("ptc.started", { executionId, sessionId: context.sessionId, agentId: context.agentId });
     let sandboxResult: PtcSandboxExecutionResult;
     try {
