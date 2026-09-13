@@ -1,6 +1,8 @@
 import type { ContextStats } from "./context.js";
 import type { ContextEviction } from "./compaction.js";
+import type { ConsolidationJob, ConsolidationResult } from "./consolidation.js";
 import type { HistoryMessage } from "./contracts.js";
+import type { MemoryRecord } from "./memory.js";
 
 export interface HarnessEventMap {
   "message.received": { message: HistoryMessage };
@@ -13,6 +15,13 @@ export interface HarnessEventMap {
   };
   /** Emitted only after an automatic pin and durable compaction checkpoint are updated. */
   "context.evicted": ContextEviction;
+  "memory.consolidation.requested": { job: ConsolidationJob; created: boolean };
+  "memory.consolidation.started": { job: ConsolidationJob };
+  "memory.consolidation.completed": ConsolidationResult;
+  "memory.consolidation.failed": { job: ConsolidationJob; error: string };
+  "memory.created": { jobId: string; memory: MemoryRecord };
+  "memory.updated": { jobId: string; memory: MemoryRecord };
+  "memory.superseded": { jobId: string; superseded: MemoryRecord; replacement: MemoryRecord };
 }
 
 type Listener<T> = (payload: T) => void | Promise<void>;

@@ -4,13 +4,13 @@ Mnemos is a TypeScript cognitive-harness runtime. Its architectural direction an
 
 ## Current status
 
-**Phase 3 — Long-Term Memory Foundation is implemented.** The project currently provides:
+**Phase 4 — Hidden Agent Consolidation is implemented.** The project currently provides:
 
-- `@mnemos/core`: `Harness`, the Visible Agent and replaceable `ModelProvider` interfaces, `MockModelProvider`, context accounting, session-aware pinned context, an in-process event bus, `CompactionService`, and Memory-domain contracts/services.
-- `@mnemos/storage`: SQLite-backed append-only `HistoryStore`, separate mutable `StateStore`, durable compaction checkpoints, and a SQLite/FTS5 `MemoryStore`.
+- `@mnemos/core`: `Harness`, separate Visible and Hidden Agent abstractions over replaceable `ModelProvider`s, context accounting, session-aware pinned context, an in-process event bus, compaction, memory, consolidation, and retrieval contracts.
+- `@mnemos/storage`: SQLite-backed append-only `HistoryStore`, separate mutable `StateStore`, durable compaction checkpoints, a SQLite/FTS5 `MemoryStore`, and a durable consolidation-job queue.
 - `@mnemos/cli`: an interactive, persistent chat shell using the mock provider.
 
-The runtime emits `message.received`, `message.generated`, `context.pressure`, `context.compaction.requested`, and `context.evicted`.
+The runtime emits `message.received`, `message.generated`, `context.pressure`, `context.compaction.requested`, `context.evicted`, and the `memory.consolidation.*` / `memory.*` lifecycle events.
 
 ## Context compaction
 
@@ -39,9 +39,34 @@ The Phase 3 model supports semantic, episodic, decision, preference, and entity 
 
 Superseding is an atomic store operation: it preserves the old record, changes it to `superseded`, and sets its successor. Self-supersession, missing successors, archived predecessors, and invalid successor statuses are rejected.
 
-Memory creation remains explicit in this phase. Mnemos does **not** yet subscribe to `context.evicted`, extract facts with an LLM, or automatically create Memory.
+## Hidden-agent consolidation
 
-Not implemented yet: Hidden Agent consolidation, embeddings/vector retrieval, reranking, artifacts, tool runtime/discovery, and PTC. These remain intentionally reserved for Phases 4–9.
+`MemoryConsolidationService` is a background pipeline, separate from `Harness` and `ContextManager`:
+
+```text
+context.evicted → durable job → extract candidates → lexical retrieve
+→ reconcile proposal → runtime validation → MemoryService / MemoryStore
+```
+
+`HiddenAgent` has no `MemoryStore` capability. It returns only untrusted structured JSON, which is parsed with Zod before the runtime applies `new`, `duplicate`, `update`, `supersede`, or `irrelevant` operations. A `contradiction` is accepted only as an explicit intermediate judgment: the job fails retryably until it is reconciled into an update or supersession, so conflicting current facts are never silently persisted. The policy lives in a versioned module; `ModelProviderHiddenAgent` defaults to a separate 1M-token context budget without binding Core to a vendor SDK.
+
+Every proposal source must reference a real message from that job's evicted set in the same session. `MemoryService` then revalidates canonical History before each write. `assistant_inference` is capped at 0.5 confidence; it cannot silently become an explicit user fact.
+
+`SqliteConsolidationJobStore` records `pending`, `running`, `completed`, and `failed` jobs. A SHA-256 key over the exact evicted message IDs deduplicates repeated event delivery. Writes use deterministic job-derived IDs, so post-crash retries converge instead of producing duplicate Memory. Interrupted `running` jobs are requeued when a new worker begins processing; failed jobs require an explicit `retry(jobId)`.
+
+Attach the service to the event bus, then run its worker separately from visible requests:
+
+```ts
+const stop = consolidation.attach(harness.events);
+await consolidation.processAvailable(); // invoke from a background worker loop
+stop();
+```
+
+`consolidation.remember({ sessionId, candidate })` is the safe `memory.remember()` domain entry point for a Visible Agent. It first checks that the candidate's source messages exist in canonical History, then persists a `visible-candidate` consolidation job. The candidate is merely a hint to the Hidden Agent; it cannot write Memory directly.
+
+Memory lifecycle events are emitted only around completed state transitions. Subscriber exceptions are caught by the consolidation service and cannot roll back or partially complete a Memory transaction.
+
+Not implemented yet: embeddings/vector or hybrid retrieval, reranking, artifacts, tool runtime/discovery, memory decay, entity-graph reasoning, and PTC. These remain intentionally reserved for Phases 5–9.
 
 ## Requirements
 
@@ -60,6 +85,6 @@ pnpm chat
 
 `pnpm chat` stores data in `./mnemos.sqlite` by default. Set `MNEMOS_DB_PATH` and `MNEMOS_SESSION_ID` to choose the database location and conversation session.
 
-## Phase 4 extension points
+## Phase 5 extension points
 
-`context.evicted` already carries exact History references and raw evicted messages. A future Hidden Agent can use `MemoryService.create` with those references after it performs extraction, comparison, and reconciliation. Memory storage itself has no event subscription and no model dependency, preserving the Phase 4 boundary.
+`MemoryRetriever` is the replacement boundary for Phase 5. Phase 4's `LexicalMemoryRetriever` uses the existing FTS5 search, while a hybrid vector/lexical retriever can implement the same interface without changing the Hidden Agent, job lifecycle, source grounding, or Memory write path.
