@@ -1,0 +1,16 @@
+{
+  "name": "@mnemos/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "mnemos": "./dist/index.js"
+  },
+  "scripts": {
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@mnemos/core": "workspace:*",
+    "@mnemos/storage": "workspace:*"
+  }
+}

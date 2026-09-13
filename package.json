@@ -1,0 +1,23 @@
+{
+  "name": "mnemos",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Dual-agent cognitive harness runtime",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run",
+    "chat": "pnpm --filter @mnemos/cli start"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.10.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.8"
+  }
+}
