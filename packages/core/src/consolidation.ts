@@ -290,12 +290,14 @@ export class ModelProviderHiddenAgent implements HiddenAgent {
     return {
       pinned: [],
       recentMessages: messages,
+      artifactHandles: [],
       stats: {
         usedTokens,
         contextLimit: this.config.contextLimit,
         systemTokens: 0,
         pinnedTokens: 0,
         recentRawTokens: usedTokens,
+        artifactHandleTokens: 0,
         retrievedMemoryTokens: 0,
         toolResultTokens: 0,
         reservedTokens: 0,

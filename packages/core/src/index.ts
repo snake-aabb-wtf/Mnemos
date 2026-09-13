@@ -1,4 +1,5 @@
 export * from "./context.js";
+export * from "./artifact.js";
 export * from "./compaction.js";
 export * from "./consolidation.js";
 export * from "./contracts.js";

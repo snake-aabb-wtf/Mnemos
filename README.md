@@ -4,10 +4,10 @@ Mnemos is a TypeScript cognitive-harness runtime. Its architectural direction an
 
 ## Current status
 
-**Phase 5 — Hybrid Memory Retrieval is implemented.** The project currently provides:
+**Phase 6 — Artifact Store is implemented.** The project currently provides:
 
-- `@mnemos/core`: `Harness`, separate Visible and Hidden Agent abstractions over replaceable `ModelProvider` / `EmbeddingProvider` interfaces, context accounting, memory consolidation, and hybrid retrieval / evaluation contracts.
-- `@mnemos/storage`: SQLite-backed append-only `HistoryStore`, separate mutable `StateStore`, durable compaction checkpoints, SQLite/FTS5 Memory, a durable consolidation-job queue, and a rebuildable local vector index.
+- `@mnemos/core`: `Harness`, separate Visible and Hidden Agent abstractions over replaceable `ModelProvider` / `EmbeddingProvider` interfaces, context accounting, memory consolidation, hybrid retrieval / evaluation contracts, and Artifact / spill contracts.
+- `@mnemos/storage`: SQLite-backed append-only `HistoryStore`, separate mutable `StateStore`, durable compaction checkpoints, SQLite/FTS5 Memory, a durable consolidation-job queue, a rebuildable local vector index, and SQLite metadata plus filesystem-backed Artifacts.
 - `@mnemos/cli`: an interactive, persistent chat shell using the mock provider.
 
 The runtime emits `message.received`, `message.generated`, `context.pressure`, `context.compaction.requested`, `context.evicted`, and the `memory.consolidation.*` / `memory.*` lifecycle events.
@@ -91,7 +91,23 @@ The current local backend is `SqliteMemoryVectorStore`. `sqlite-vec` is not inst
 
 Phase 4 consolidation accepts this same retriever unchanged. The fixed Phase 5 evaluation fixture covers exact lexical match, semantic paraphrase, symbols, entity retrieval, current vs historical facts, and confidence; its deterministic tests compute Recall@K, Hit@K, and MRR.
 
-Not implemented yet: Artifact Store, tool runtime/discovery, PTC, memory decay, entity-graph reasoning, and distributed retrieval. These remain intentionally reserved for Phases 6–9.
+## Artifact Store
+
+Phase 6 keeps large, intermediate data out of visible-agent Context. `ArtifactStore` is a Core contract with `create`, `get`, `read`, `query`, `delete`, `verify`, expiry cleanup, and orphan recovery operations. `SqliteArtifactStore` is the default implementation:
+
+```text
+Artifact metadata + derived text-line index → SQLite
+Immutable Artifact body                    → configured local filesystem directory
+Visible-agent context                      → small artifact:// handle only
+```
+
+An `ArtifactRecord` contains scope (`session` or `persistent`), optional expiry, MIME/type, byte size, SHA-256 checksum, summary, and opaque internal storage location. Its public `ArtifactHandle` deliberately excludes the storage location and body. `ContextManager.buildVisible(..., artifactHandles)` accounts only for handle text, never body bytes.
+
+Bodies use generated UUID filenames rather than display names, remain confined to the configured storage directory, are written to a temporary file and atomically renamed before metadata is published, and are checksum-verified on full reads or with `verify`. Metadata reads do not touch body files. Range reads use filesystem offsets; text query runs locally against a bounded, rebuildable line/chunk index and rejects binary MIME types. A missing body remains visible in metadata and raises a specific error on body operations so it can be diagnosed or cleaned up safely.
+
+`ArtifactSpillService` is the Phase 6 boundary for a future dispatcher: small strings may remain inline; binary values and larger strings or streams are stored and returned as an `artifact://…` handle. It consumes `string`, `Uint8Array`, or `AsyncIterable<Uint8Array>` without converting a stream into a giant context string. It intentionally does **not** execute tools or expose model-callable `artifact.*` tools—that remains Phase 7.
+
+Not implemented yet: tool runtime/discovery, native model tool calling, PTC, memory decay, entity-graph reasoning, and distributed retrieval. These remain intentionally reserved for Phases 7–9 and later.
 
 ## Requirements
 
@@ -111,6 +127,6 @@ pnpm chat
 
 `pnpm chat` stores data in `./mnemos.sqlite` by default. Set `MNEMOS_DB_PATH` and `MNEMOS_SESSION_ID` to choose the database location and conversation session.
 
-## Phase 6 extension points
+## Phase 7 extension points
 
-Phase 6 can add Artifact storage without changing retrieval or consolidation boundaries. `MemoryVectorStore`, `EmbeddingProvider`, and `MemoryReranker` remain independently replaceable for future sqlite-vec, external model, cross-encoder, or larger-scale adapters.
+Phase 7 can adapt `ArtifactStore` and `ArtifactSpillService` behind a `ToolRegistry` / `ToolDispatcher` without moving execution, permissions, or model schemas into either Artifact package. Artifact handles already contain the stable reference information that a dispatcher can return to the Visible Agent. `MemoryVectorStore`, `EmbeddingProvider`, and `MemoryReranker` remain independently replaceable for future sqlite-vec, external model, cross-encoder, or larger-scale adapters.

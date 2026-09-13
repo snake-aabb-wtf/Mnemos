@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ArtifactHandle } from "./artifact.js";
 import type { HistoryMessage } from "./contracts.js";
 
 export interface TokenEstimator {
@@ -58,6 +59,8 @@ export interface ContextStats {
   systemTokens: number;
   pinnedTokens: number;
   recentRawTokens: number;
+  /** Artifact handles are context-safe references; their backing bodies are excluded. */
+  artifactHandleTokens: number;
   retrievedMemoryTokens: number;
   toolResultTokens: number;
   reservedTokens: number;
@@ -67,7 +70,19 @@ export interface ContextStats {
 export interface BuiltContext {
   pinned: readonly PinnedContext[];
   recentMessages: readonly HistoryMessage[];
+  artifactHandles: readonly ArtifactHandle[];
   stats: ContextStats;
+}
+
+/** A bounded, inspectable description of an Artifact; never include its body. */
+export function artifactHandleContextText(handle: ArtifactHandle): string {
+  return [
+    `Artifact: ${handle.id}`,
+    `Type: ${handle.type}`,
+    ...(handle.mimeType === undefined ? [] : [`MIME: ${handle.mimeType}`]),
+    `Size: ${handle.sizeBytes} bytes`,
+    ...(handle.summary === undefined ? [] : [`Summary: ${handle.summary}`]),
+  ].join("\n");
 }
 
 export class ContextManager {
@@ -123,22 +138,33 @@ export class ContextManager {
   }
 
   /** Builds a context from an already selected visible working set. */
-  buildVisible(sessionId: string | undefined, recentMessages: readonly HistoryMessage[], systemPrompt = ""): BuiltContext {
+  buildVisible(
+    sessionId: string | undefined,
+    recentMessages: readonly HistoryMessage[],
+    systemPrompt = "",
+    artifactHandles: readonly ArtifactHandle[] = [],
+  ): BuiltContext {
     const pins = this.listPins(sessionId);
     const systemTokens = this.tokenEstimator.estimateText(systemPrompt);
     const pinnedTokens = this.pinTokens(pins);
     const recentRawTokens = recentMessages.reduce((sum, message) => sum + this.tokenEstimator.estimateMessage(message), 0);
-    const usedTokens = systemTokens + pinnedTokens + recentRawTokens;
+    const artifactHandleTokens = artifactHandles.reduce(
+      (sum, handle) => sum + this.tokenEstimator.estimateText(artifactHandleContextText(handle)),
+      0,
+    );
+    const usedTokens = systemTokens + pinnedTokens + recentRawTokens + artifactHandleTokens;
     const pressure = Math.min(1, (usedTokens + this.budgets.reservedTokens) / this.budgets.contextLimit);
     return {
       pinned: pins,
       recentMessages,
+      artifactHandles,
       stats: {
         usedTokens,
         contextLimit: this.budgets.contextLimit,
         systemTokens,
         pinnedTokens,
         recentRawTokens,
+        artifactHandleTokens,
         retrievedMemoryTokens: 0,
         toolResultTokens: 0,
         reservedTokens: this.budgets.reservedTokens,
