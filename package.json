@@ -13,6 +13,7 @@
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
     "eval:retrieval": "vitest run packages/storage/src/retrieval.test.ts",
+    "eval:ptc": "vitest run packages/storage/src/ptc.test.ts",
     "chat": "pnpm --filter @mnemos/cli start"
   },
   "devDependencies": {

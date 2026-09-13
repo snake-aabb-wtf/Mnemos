@@ -63,6 +63,26 @@ export interface HarnessEventMap {
     handle: ArtifactHandle;
     serializedBytes: number;
   };
+  /** PTC events contain execution metadata only; program source and intermediate values stay out of events. */
+  "ptc.started": { executionId: string; sessionId: string; agentId: string };
+  "ptc.completed": {
+    executionId: string;
+    sessionId: string;
+    agentId: string;
+    durationMs: number;
+    toolCallCount: number;
+    peakConcurrency: number;
+    status: "success";
+  };
+  "ptc.failed": {
+    executionId: string;
+    sessionId: string;
+    agentId: string;
+    durationMs: number;
+    toolCallCount: number;
+    status: "error";
+    errorCode: string;
+  };
 }
 
 type Listener<T> = (payload: T) => void | Promise<void>;

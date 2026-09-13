@@ -12,9 +12,12 @@ import {
   MemoryConsolidationService,
   MemoryService,
   MockModelProvider,
+  PtcRuntime,
   ToolDispatcher,
   ToolRegistry,
   defineTool,
+  registerPtcTool,
+  runCodeToolName,
   registerCognitiveTools,
   type HiddenAgent,
   type ToolDispatchContext,
@@ -60,6 +63,9 @@ async function runtime(contextManager = new ContextManager()) {
   eventBus.on("tool.failed", ({ errorCode }) => { events.push(`failed:${errorCode}`); });
   eventBus.on("tool.denied", ({ toolName }) => { events.push(`denied:${toolName}`); });
   eventBus.on("tool.output.spilled", ({ toolName }) => { events.push(`spilled:${toolName}`); });
+  eventBus.on("ptc.started", () => { events.push("ptc-started"); });
+  eventBus.on("ptc.completed", () => { events.push("ptc-completed"); });
+  eventBus.on("ptc.failed", ({ errorCode }) => { events.push("ptc-failed:" + errorCode); });
   const spill = new ArtifactSpillService(artifacts, { maxInlineBytes: 1_024, spillThresholdBytes: 2_048 });
   const dispatcher = new ToolDispatcher({
     registry,
@@ -79,6 +85,39 @@ async function runtime(contextManager = new ContextManager()) {
     ],
   };
   return { directory, history, state, memoryStore, artifacts, jobs, memories, retriever, consolidation, registry, dispatcher, spill, audit, eventBus, events, context, contextManager };
+}
+
+function enablePtc(
+  app: Awaited<ReturnType<typeof runtime>>,
+  policy: ConstructorParameters<typeof PtcRuntime>[0]["policy"] = {},
+) {
+  const ptc = new PtcRuntime({
+    registry: app.registry,
+    dispatcher: app.dispatcher,
+    artifactSpill: app.spill,
+    events: app.eventBus,
+    policy,
+  });
+  registerPtcTool(app.registry, ptc);
+  return ptc;
+}
+
+async function runPtc(
+  app: Awaited<ReturnType<typeof runtime>>,
+  code: string,
+  options: { language?: "typescript" | "javascript"; permissions?: readonly import("@mnemos/core").ToolPermission[] } = {},
+) {
+  const result = await app.dispatcher.dispatch({
+    id: "ptc-" + Math.random().toString(36).slice(2),
+    name: runCodeToolName,
+    arguments: { code, ...(options.language === undefined ? {} : { language: options.language }) },
+  }, {
+    ...app.context,
+    grantedPermissions: options.permissions ?? [...app.context.grantedPermissions, "tool:execute"],
+  });
+  expect(result.status).toBe("success");
+  if (result.status !== "success" || result.output.kind !== "inline") throw new Error("expected inline run_code result");
+  return result.output.value as import("@mnemos/core").PtcExecutionResult;
 }
 
 async function currentDatabaseMemory(app: Awaited<ReturnType<typeof runtime>>) {
@@ -325,5 +364,26 @@ describe("Phase 7 Tool Runtime", () => {
     expect(remembered).toMatchObject({ status: "success", output: { kind: "inline" } });
     expect((await app.jobs.list()).at(-1)).toMatchObject({ origin: "visible-candidate" });
     expect((await app.memories.list()).map((entry) => entry.content)).not.toContain("User prefers compact replies.");
+  });
+
+  it("registers run_code as a normal Dispatcher tool and runs generated TypeScript through the RPC SDK", async () => {
+    const app = await runtime();
+    const inputSchema = app.registry.get("memory.search")!.inputSchema;
+    app.registry.register(defineTool({
+      name: "test.echo", description: "Returns its query.", inputSchema,
+      requiredPermissions: ["state:read"], sideEffect: "read", concurrencySafe: true,
+      async execute(input: { query: string }) { return { value: input.query }; },
+    }));
+    const ptc = enablePtc(app);
+    expect(app.registry.get(runCodeToolName)?.requiredPermissions).toEqual(["tool:execute"]);
+    expect(ptc.sdkDescription().declarations).toContain("readonly echo");
+    const result = await runPtc(app, "const response: { value: string } = await tools.test.echo({ query: 'from-ptc' }); return response.value;");
+    expect(result).toMatchObject({ status: "success", result: "from-ptc", stats: { toolCalls: 1 } });
+    expect(await app.audit.list({ sessionId: "session-a" })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: runCodeToolName }),
+      expect.objectContaining({ toolName: "test.echo" }),
+    ]));
+    expect(app.events).toContain("ptc-started");
+    expect(app.events).toContain("ptc-completed");
   });
 });

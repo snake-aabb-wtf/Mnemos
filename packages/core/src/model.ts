@@ -19,6 +19,8 @@ export interface ModelRequest {
   context: BuiltContext;
   /** Omitted for callers that do not enable the Phase 7 Tool Runtime. */
   tools?: readonly ModelToolDeclaration[];
+  /** Versioned runtime guidance, including PTC policy and generated SDK catalog when enabled. */
+  runtimeInstructions?: readonly string[];
 }
 
 export interface TextModelResponse {

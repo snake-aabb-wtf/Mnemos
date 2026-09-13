@@ -5,6 +5,7 @@ import type { HistoryMessage, HistoryStore, StateStore } from "./contracts.js";
 import { EventBus, type HarnessEventMap } from "./events.js";
 import { VisibleAgent, type ModelProvider, type ModelToolCall } from "./model.js";
 import { ToolDispatcher, ToolRegistry, type ToolDispatchContext, type ToolPermission } from "./tool.js";
+import { ptcModelInstructions, runCodeToolName, type PtcRuntime, type ToolExecutionMode } from "./ptc.js";
 
 export interface HarnessToolRuntimeOptions {
   registry: ToolRegistry;
@@ -14,6 +15,10 @@ export interface HarnessToolRuntimeOptions {
   /** Host-granted capabilities. Model-generated call arguments never affect this set. */
   grantedPermissions?: readonly ToolPermission[];
   maxToolIterations?: number;
+  /** Native calls, PTC-only run_code, or both. The default preserves a Phase 7-only Registry. */
+  executionMode?: ToolExecutionMode;
+  /** Required whenever PTC is exposed to the Visible Agent. */
+  ptc?: PtcRuntime;
 }
 
 export interface HarnessOptions {
@@ -36,7 +41,9 @@ export class Harness {
   private readonly logger: Logger;
   private readonly systemPrompt: string;
   private readonly compaction: CompactionService;
-  private readonly toolRuntime?: Required<Omit<HarnessToolRuntimeOptions, "registry" | "dispatcher">> & Pick<HarnessToolRuntimeOptions, "registry" | "dispatcher">;
+  private readonly toolRuntime?: Required<Omit<HarnessToolRuntimeOptions, "registry" | "dispatcher" | "ptc" | "executionMode">>
+    & Pick<HarnessToolRuntimeOptions, "registry" | "dispatcher" | "ptc">
+    & { executionMode: ToolExecutionMode };
 
   constructor(private readonly options: HarnessOptions) {
     this.context = options.context ?? new ContextManager();
@@ -51,6 +58,11 @@ export class Harness {
     if (options.toolRuntime) {
       const maxToolIterations = options.toolRuntime.maxToolIterations ?? 8;
       if (!Number.isInteger(maxToolIterations) || maxToolIterations < 0) throw new Error("maxToolIterations must be a non-negative integer");
+      const executionMode = options.toolRuntime.executionMode
+        ?? (options.toolRuntime.ptc !== undefined && options.toolRuntime.registry.has(runCodeToolName) ? "both" : "native");
+      if (executionMode !== "native" && (options.toolRuntime.ptc === undefined || !options.toolRuntime.registry.has(runCodeToolName))) {
+        throw new Error("PTC execution mode requires a registered run_code tool and PtcRuntime");
+      }
       this.toolRuntime = {
         registry: options.toolRuntime.registry,
         dispatcher: options.toolRuntime.dispatcher,
@@ -58,6 +70,8 @@ export class Harness {
         principal: options.toolRuntime.principal ?? "visible-agent",
         grantedPermissions: [...(options.toolRuntime.grantedPermissions ?? [])],
         maxToolIterations,
+        executionMode,
+        ...(options.toolRuntime.ptc === undefined ? {} : { ptc: options.toolRuntime.ptc }),
       };
     }
     this.logger = options.logger ?? pino({ name: "mnemos" });
@@ -77,7 +91,7 @@ export class Harness {
         sessionId,
         input: content,
         context: prepared.context,
-        ...(this.toolRuntime === undefined ? {} : { tools: this.toolRuntime.registry.nativeDeclarations() }),
+        ...(this.toolRuntime === undefined ? {} : { tools: this.modelTools(), runtimeInstructions: this.runtimeInstructions() }),
       });
       if (response.kind !== "tool-calls") {
         const generated = await this.appendAssistant(sessionId, response.content, response.metadata);
@@ -166,7 +180,23 @@ export class Harness {
 
   private toolSchemaTexts(): readonly string[] {
     if (!this.toolRuntime) return [];
-    return this.toolRuntime.registry.nativeDeclarations().map((declaration) => JSON.stringify(declaration));
+    return [
+      ...this.modelTools().map((declaration) => JSON.stringify(declaration)),
+      ...this.runtimeInstructions(),
+    ];
+  }
+
+  private modelTools() {
+    if (!this.toolRuntime) return [];
+    const declarations = this.toolRuntime.registry.nativeDeclarations();
+    if (this.toolRuntime.executionMode === "native") return declarations.filter((tool) => tool.name !== runCodeToolName);
+    if (this.toolRuntime.executionMode === "ptc") return declarations.filter((tool) => tool.name === runCodeToolName);
+    return declarations;
+  }
+
+  private runtimeInstructions(): readonly string[] {
+    if (!this.toolRuntime || this.toolRuntime.executionMode === "native" || this.toolRuntime.ptc === undefined) return [];
+    return ptcModelInstructions(this.toolRuntime.ptc.sdkDescription());
   }
 
   private historyToolCallContent(call: ModelToolCall): string {

@@ -636,9 +636,9 @@ artifact.delete()
 三种执行模式：
 
 ```text
-direct
 native
 ptc
+both
 ```
 
 简单：
@@ -662,6 +662,8 @@ read package.json
 
 使用 PTC。
 
+both 同时暴露 native tools 和 run_code；本阶段不实现自动复杂度 Router，由模型依据版本化 policy 自行选择。
+
 ---
 
 # 15. PTC Architecture
@@ -670,10 +672,13 @@ read package.json
 Visible Agent
       │
       ▼
- Generated Program
+   run_code
       │
       ▼
-Sandbox Runtime
+ PTC Runtime
+      │
+      ▼
+Sandboxed Program
       │
       ▼
 Generated Tool SDK
@@ -715,6 +720,8 @@ available tools
 ```
 
 大输出进入 Artifact Store。
+
+Phase 8 的开发期 backend 必须使用单次独立进程、空环境、资源上限和 RPC-only Tool SDK；Node Permission Model 可拒绝 filesystem、child process、worker、addon 和 WASI 能力。当前 Node Permission Model 没有通用的 OS 级 network deny 开关，因此 source-level network/import 拒绝只是 defense in depth，不能宣称为 hostile-code production sandbox。Phase 13 应在同一个 PtcSandbox interface 后提供 Docker、gVisor、Firecracker 或等价的网络隔离后端。
 
 ---
 

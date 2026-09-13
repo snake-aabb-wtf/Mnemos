@@ -4,13 +4,13 @@ Mnemos is a TypeScript cognitive-harness runtime. Its architectural direction an
 
 ## Current status
 
-**Phase 7 — Tool Runtime is implemented.** The project currently provides:
+**Phase 8 — Programmatic Tool Calling is implemented.** The project currently provides:
 
 - `@mnemos/core`: `Harness`, separate Visible and Hidden Agent abstractions over replaceable `ModelProvider` / `EmbeddingProvider` interfaces, context accounting, memory consolidation, hybrid retrieval / evaluation contracts, Artifact / spill contracts, and a provider-neutral Tool Runtime.
 - `@mnemos/storage`: SQLite-backed append-only `HistoryStore`, separate mutable `StateStore`, durable compaction checkpoints, SQLite/FTS5 Memory, a durable consolidation-job queue, a rebuildable local vector index, and SQLite metadata plus filesystem-backed Artifacts.
 - `@mnemos/cli`: an interactive, persistent chat shell using the mock provider.
 
-The runtime emits `message.received`, `message.generated`, `context.pressure`, `context.compaction.requested`, `context.evicted`, the `memory.consolidation.*` / `memory.*` lifecycle events, and compact `tool.*` lifecycle events.
+The runtime emits `message.received`, `message.generated`, `context.pressure`, `context.compaction.requested`, `context.evicted`, the `memory.consolidation.*` / `memory.*` lifecycle events, compact `tool.*` lifecycle events, and compact `ptc.started` / `ptc.completed` / `ptc.failed` lifecycle events.
 
 ## Context compaction
 
@@ -117,7 +117,7 @@ Model ToolCall → ToolRegistry → permission check → Zod validation
 → audit + tool lifecycle event → structured ToolResult
 ```
 
-`ToolDefinition` provides a stable dotted name, description, Zod input/output schemas, explicit execution context, required permissions, side-effect classification (`none`, `read`, `write`, `destructive`), concurrency hint, and optional timeout. `ToolRegistry` only owns registration and discovery of definitions; `ToolDispatcher` is the sole execution gate for native calls and is the required future gate for PTC.
+`ToolDefinition` provides a stable dotted name (plus reserved runtime entry point `run_code`), description, Zod input/output schemas, explicit execution context, required permissions, side-effect classification (`none`, `read`, `write`, `destructive`), concurrency hint, and optional timeout. `ToolRegistry` only owns registration and discovery of definitions; `ToolDispatcher` is the sole execution gate for native calls and PTC subcalls.
 
 Dispatcher results are either a bounded inline value or an Artifact handle. Invalid arguments, missing tools, denied permissions, timeouts, invalid output, spill failures, and execution exceptions return structured, model-safe error envelopes; internal exception text and stacks are never returned to the model. The output policy has independent inline, spill, and model-visible byte limits. Binary output is always externalized.
 
@@ -135,7 +135,38 @@ Permissions are host-provided in `ToolDispatchContext` (`sessionId`, `agentId`, 
 
 Zod remains the single authored schema. The registry exports a deterministic JSON Schema subset for provider-neutral `ModelToolDeclaration`s; no vendor SDK types enter Core. `ModelProvider` can now return normal text or a native tool-call response. When `Harness` receives a tool-call response, it records an assistant tool-call message and paired tool result in append-only History, dispatches through the sole runtime entry point, rebuilds Context, and asks the model to continue. `maxToolIterations` terminates loops safely. Tool declaration, tool-call, and tool-result tokens are all included in Context accounting; spilled results record only their small handles in History.
 
-Not implemented yet: PTC code execution, a generated PTC SDK, sandboxing, a PTC concurrency scheduler, dynamic `tools.search` / `tools.describe`, external connectors, memory decay, entity-graph reasoning, and distributed retrieval. These remain intentionally reserved for Phases 8–9 and later.
+## Programmatic Tool Calling
+
+Phase 8 introduces run_code as an ordinary registered Tool:
+
+    Visible Agent -> run_code -> PtcRuntime -> isolated child process
+    -> generated tools.* SDK / IPC -> PtcToolScheduler -> ToolDispatcher -> actual Tool
+
+PtcSdkGenerator derives TypeScript declarations and the catalog from existing ToolRegistry JSON Schema descriptors. There is no second PTC-only tool contract. The sandbox receives no stores, Dispatcher, filesystem path, database object, environment, or actual tool implementation. A tools.memory.search(input) call is an RPC request whose host side reconstructs identity and permissions from the original execution context before calling ToolDispatcher.
+
+ToolExecutionMode is configurable per Harness: native exposes normal tools except run_code; ptc exposes only run_code; both exposes both. When PTC is enabled, Harness passes versioned ptc-policy/v1 instructions and the generated SDK catalog as ModelRequest.runtimeInstructions, and accounts for them alongside visible tool schemas. The default remains native for a Phase 7-only Registry; a Registry with a registered PtcRuntime defaults to both.
+
+Each invocation gets a fresh Node child process, an empty environment, a private temporary working directory, Node Permission Model deny-by-default filesystem/child-process/worker/addon/WASI capabilities, bounded IPC, a V8 old-space limit, a parent-enforced wall-clock deadline, and cleanup after termination. TypeScript is stripped/transformed host-side; imports, require, process, direct network APIs, and other ambient-capability spellings are rejected before launch. The program can only use tools.*; no code parameter can add a permission.
+
+This is an isolated development backend, not a claim of production-grade hostile-code confinement. Node's Permission Model has no general OS-level network-deny switch, and language-level source rejection is defense in depth rather than a complete adversarial-JavaScript proof. Phase 13 should supply the same PtcSandbox interface with a container, gVisor, Firecracker, or equivalent network-isolated backend. Do not enable generated-code execution for mutually untrusted tenants on this backend.
+
+The memory setting is a V8 old-space ceiling for the child process, so Node/runtime minimums and external/native allocations can make it less precise than a cgroup/container memory limit. The parent still isolates a crash from Mnemos and converts obvious heap exhaustion into a structured PTC error; production hardening needs an OS-level memory controller.
+
+PtcToolScheduler consults the existing Tool metadata. concurrencySafe none/read calls can overlap up to maxConcurrentToolCalls; writes, destructive tools, and non-concurrency-safe calls wait for preceding reads and form a barrier for following work. PTC enforces maxToolCalls, maxExecutionMs, maxMemoryMb, maxToolArgumentBytes, bounded logs, and separate inline/transport result byte limits. Inner Dispatcher results already follow Artifact spill; a large final PTC result is force-spilled as a ptc-result Artifact handle. Only the single run_code request/result pair enters conversational History and visible Context; all inner calls remain in dispatcher audit/events.
+
+Register it explicitly in a host composition root:
+
+    const ptc = new PtcRuntime({ registry, dispatcher, artifactSpill, events });
+    registerPtcTool(registry, ptc);
+    const harness = new Harness({
+      history, state, provider,
+      toolRuntime: {
+        registry, dispatcher, ptc, executionMode: "both",
+        grantedPermissions: ["tool:execute", "memory:read", "history:read"],
+      },
+    });
+
+Not implemented yet: dynamic tool discovery, semantic tool search, MCP/external connectors, browser or shell host access, a production sandbox fleet, memory decay, entity-graph reasoning, and distributed retrieval. These remain intentionally reserved for Phases 9 and later.
 
 ## Requirements
 
@@ -150,11 +181,12 @@ pnpm build
 pnpm typecheck
 pnpm test
 pnpm eval:retrieval
+pnpm eval:ptc
 pnpm chat
 ```
 
 `pnpm chat` stores data in `./mnemos.sqlite` by default. Set `MNEMOS_DB_PATH` and `MNEMOS_SESSION_ID` to choose the database location and conversation session. The CLI intentionally remains a minimal mock chat host; embedders enable the native tool loop by supplying `ToolRegistry`, `ToolDispatcher`, and host-granted permissions to `Harness`.
 
-## Phase 8 extension points
+## Phase 9 extension points
 
-Phase 8 must invoke `ToolDispatcher` rather than domain services directly. The existing `ToolDefinition` metadata (`requiredPermissions`, side effects, `concurrencySafe`, timeout), JSON Schema export, structured `ToolCall` / `ToolResult`, output policy, Artifact spill, and host-provided execution context are the intended PTC SDK and scheduler boundaries. No PTC runtime or sandbox exists yet. `MemoryVectorStore`, `EmbeddingProvider`, and `MemoryReranker` remain independently replaceable for future sqlite-vec, external model, cross-encoder, or larger-scale adapters.
+Phase 9 must build Dynamic Tool Discovery on existing Registry descriptors and PtcSdkGenerator, without creating a second contract or exposing raw implementations. PtcSandbox, PtcRuntime, ToolExecutionMode, versioned PTC policy instructions, and Context schema accounting are the Phase 8 boundaries available to the next phase. MemoryVectorStore, EmbeddingProvider, and MemoryReranker remain independently replaceable for future sqlite-vec, external model, cross-encoder, or larger-scale adapters.

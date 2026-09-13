@@ -3,10 +3,15 @@ import type { ArtifactHandle, ArtifactSpillService } from "./artifact.js";
 import type { EventBus, HarnessEventMap } from "./events.js";
 import type { ModelToolDeclaration } from "./model.js";
 
-const toolNamePattern = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/;
+/**
+ * `run_code` is the one root-level runtime control tool. All capability tools
+ * remain namespaced, which keeps the Registry's normal ownership boundary
+ * intact while giving providers a stable, conventional PTC entry point.
+ */
+const toolNamePattern = /^(?:run_code|[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+)$/;
 const toolPermissionPattern = /^[a-z][a-z0-9-]*:(?:read|write|delete|execute)$/;
 
-export const toolNameSchema = z.string().regex(toolNamePattern, "Tool names must use a stable dotted namespace");
+export const toolNameSchema = z.string().regex(toolNamePattern, "Tool names must use a stable dotted namespace (except run_code)");
 export type ToolName = z.infer<typeof toolNameSchema>;
 
 export const toolPermissionSchema = z.string().regex(toolPermissionPattern, "Permissions must use domain:verb form");
@@ -58,6 +63,8 @@ export interface RegisteredToolDefinition extends ToolMetadata {
 
 export interface ToolDescriptor extends ToolMetadata {
   inputSchema: ToolJsonSchema;
+  /** Optional result contract, used by the generated PTC TypeScript SDK. */
+  outputSchema?: ToolJsonSchema;
 }
 
 /** Registry owns available definitions only; it never executes them. */
@@ -102,6 +109,7 @@ export class ToolRegistry {
       concurrencySafe: definition.concurrencySafe,
       ...(definition.timeoutMs === undefined ? {} : { timeoutMs: definition.timeoutMs }),
       inputSchema: zodToJsonSchema(definition.inputSchema),
+      ...(definition.outputSchema === undefined ? {} : { outputSchema: zodToJsonSchema(definition.outputSchema) }),
     };
   }
 
