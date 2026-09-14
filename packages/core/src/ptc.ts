@@ -352,6 +352,7 @@ export class NodeProcessPtcSandbox implements PtcSandbox {
       let completed = false;
       let timedOut = false;
       let outputLimitExceeded = false;
+      let stderrLimitExceeded = false;
       let stderr = "";
       let outputBytes = 0;
       const finish = (result: PtcSandboxExecutionResult, terminate = true): void => {
@@ -392,21 +393,34 @@ export class NodeProcessPtcSandbox implements PtcSandbox {
       };
       child.stdout?.on("data", consumeOutput);
       child.stderr?.on("data", (chunk: Buffer) => {
+        if (completed) return;
         stderr = (stderr + chunk.toString("utf8")).slice(-8 * 1024);
         if (/heap out of memory|reached heap limit/i.test(stderr)) {
           finish(sandboxError("memory_limit", "PTC sandbox exceeded its memory budget.", false));
           return;
         }
-        consumeOutput(chunk);
+        // Fatal V8 memory diagnostics can arrive in several stderr chunks. Do
+        // not resolve as a log-limit error on the first chunk; retain the
+        // bounded tail, terminate the child, and let the exit handler classify
+        // a later OOM marker as memory_limit.
+        outputBytes += chunk.byteLength;
+        if (outputBytes > request.policy.maxLogBytes) {
+          stderrLimitExceeded = true;
+          if (child.exitCode === null && !child.killed) child.kill();
+        }
       });
       child.on("error", () => {
         finish(sandboxError("sandbox_crashed", "The PTC sandbox process failed.", true));
       });
       child.on("exit", () => {
-        if (completed || timedOut || outputLimitExceeded) return;
-        const code: PtcErrorCode = /heap out of memory|reached heap limit/i.test(stderr) ? "memory_limit" : "sandbox_crashed";
+        if (completed || timedOut) return;
+        const code: PtcErrorCode = /heap out of memory|reached heap limit/i.test(stderr)
+          ? "memory_limit"
+          : stderrLimitExceeded || outputLimitExceeded ? "log_limit_exceeded" : "sandbox_crashed";
         finish(sandboxError(code, code === "memory_limit"
           ? "PTC sandbox exceeded its memory budget."
+          : code === "log_limit_exceeded"
+            ? "PTC sandbox output exceeded its log limit."
           : "PTC sandbox exited unexpectedly.", false), false);
       });
       child.on("message", (message: unknown) => {
@@ -825,8 +839,9 @@ export function createRunCodeTool(runtime: PtcRuntime): ToolDefinition<RunCodeIn
     sideEffect: "none",
     concurrencySafe: false,
     // Dispatcher cancellation remains cooperative. Give the PTC child its own
-    // wall-clock deadline plus spawn/cleanup room so the child can be killed.
-    timeoutMs: runtime.policy.maxExecutionMs + 5_000,
+    // wall-clock deadline plus generous spawn/cleanup room so the child can be
+    // killed even when the host is under load or the child is reporting OOM.
+    timeoutMs: runtime.policy.maxExecutionMs + 30_000,
     async execute(input, context) {
       return runtime.execute(input, context);
     },
