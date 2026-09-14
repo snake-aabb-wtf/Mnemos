@@ -7,6 +7,7 @@ import {
   ArtifactBodyMissingError,
   ArtifactIntegrityError,
   ArtifactNotFoundError,
+  ArtifactQuotaExceededError,
   ArtifactQueryUnsupportedError,
   artifactCreateOptionsSchema,
   artifactIdSchema,
@@ -53,11 +54,14 @@ export interface SqliteArtifactStoreOptions {
   databasePath: string;
   /** Private directory for immutable Artifact bodies. It is not a user-visible path API. */
   storageDirectory: string;
+  /** Maximum committed body bytes; zero/undefined means unlimited. */
+  maxStorageBytes?: number;
 }
 
 function openArtifactDatabase(filename: string): Database.Database {
   const db = new Database(filename);
   db.pragma("journal_mode = WAL");
+  db.pragma("busy_timeout = 5000");
   db.pragma("foreign_keys = ON");
   return db;
 }
@@ -120,12 +124,15 @@ export class SqliteArtifactStore implements ArtifactStore {
   private readonly db: Database.Database;
   private readonly rootDirectory: string;
   private readonly deletingDirectory: string;
+  private readonly maxStorageBytes?: number;
 
   constructor(options: SqliteArtifactStoreOptions) {
     this.db = openArtifactDatabase(options.databasePath);
     migrateArtifactStore(this.db);
     this.rootDirectory = resolve(options.storageDirectory);
     this.deletingDirectory = join(this.rootDirectory, ".deleting");
+    if (options.maxStorageBytes !== undefined && (!Number.isInteger(options.maxStorageBytes) || options.maxStorageBytes < 0)) throw new Error("maxStorageBytes must be a non-negative integer");
+    this.maxStorageBytes = options.maxStorageBytes === 0 ? undefined : options.maxStorageBytes;
   }
 
   async create(input: ArtifactCreateInput): Promise<ArtifactRecord> {
@@ -376,6 +383,22 @@ export class SqliteArtifactStore implements ArtifactStore {
   }
 
   private insertRecord(record: ArtifactRecord): void {
+    if (this.maxStorageBytes !== undefined) {
+      const statement = this.db.prepare(`
+        INSERT INTO artifact_records (
+          id, session_id, scope, type, mime_type, size_bytes, storage_location, sha256,
+          summary, display_name, metadata, created_at, updated_at, expires_at
+        ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        WHERE COALESCE((SELECT SUM(size_bytes) FROM artifact_records), 0) + ? <= ?
+      `);
+      const result = statement.run(
+        record.id, record.sessionId ?? null, record.scope, record.type, record.mimeType ?? null, record.sizeBytes,
+        record.storageLocation, record.sha256, record.summary ?? null, record.displayName ?? null, JSON.stringify(record.metadata),
+        record.createdAt, record.updatedAt, record.expiresAt ?? null, record.sizeBytes, this.maxStorageBytes,
+      );
+      if (result.changes !== 1) throw new ArtifactQuotaExceededError(this.maxStorageBytes);
+      return;
+    }
     this.db.prepare(`
       INSERT INTO artifact_records (
         id, session_id, scope, type, mime_type, size_bytes, storage_location, sha256,

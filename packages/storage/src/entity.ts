@@ -34,6 +34,7 @@ interface StoredRelation {
 function open(filename: string): Database.Database {
   const db = new Database(filename);
   db.pragma("journal_mode = WAL");
+  db.pragma("busy_timeout = 5000");
   db.pragma("foreign_keys = ON");
   db.exec(`
     CREATE TABLE IF NOT EXISTS memory_graph_entities (

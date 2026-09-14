@@ -1,0 +1,23 @@
+services:
+  mnemos:
+    build: .
+    restart: unless-stopped
+    environment:
+      MNEMOS_PROFILE: production
+      MNEMOS_DB_PATH: /data/mnemos.sqlite
+      MNEMOS_ARTIFACT_DIR: /data/artifacts
+    volumes:
+      - mnemos-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "apps/cli/dist/index.js", "doctor"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  mnemos-data:

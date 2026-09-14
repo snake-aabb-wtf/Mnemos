@@ -8,6 +8,15 @@ import type { ArtifactHandle } from "./artifact.js";
 import type { ToolExecutionError } from "./tool.js";
 
 export interface HarnessEventMap {
+  "runtime.started": { runtimeVersion: string; profile: string; processId: number };
+  "runtime.ready": { runtimeVersion: string; schemaVersion?: number };
+  "runtime.shutting_down": { reason: string; gracePeriodMs: number };
+  "runtime.stopped": { durationMs: number };
+  "worker.started": { workerId: string; concurrency: number };
+  "worker.stopped": { workerId: string; activeJobs: number };
+  "job.lease_expired": { jobId: string; workerId?: string };
+  "provider.circuit_open": { provider?: string; failures: number };
+  "provider.circuit_closed": { provider?: string };
   "message.received": { message: HistoryMessage };
   "message.generated": { message: HistoryMessage };
   "context.pressure": { sessionId: string; stats: ContextStats };

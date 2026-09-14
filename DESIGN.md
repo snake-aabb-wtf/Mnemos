@@ -1704,6 +1704,21 @@ subscriber failure isolation 与上下文上限。它是 deterministic correctne
 
 ---
 
+Phase 13 的实现保持 no-API-key policy：默认测试、全部离线 eval 与 operational checks 使用 mock/scripted provider
+和本地 SQLite/runtime 组件；真实 provider smoke test 只能显式运行，缺少 credentials 时 SKIP。当前已建立
+集中 validated `RuntimeConfig`（defaults → config file → known environment overrides → explicit overrides）、
+`SecretProvider`/redaction、WAL + busy-timeout 的 SQLite 配置、通用 durable job lease/worker、持久 compact tool
+audit、migration runner、provider retry/backoff/jitter/circuit/rate-limit/usage abstractions、metrics/tracing、
+liveness/readiness、doctor/migrate/rebuild-indexes/diagnostics 操作入口，以及 `PtcSandboxBackend` capability
+contract。Artifact store 支持 committed-body byte quota，只有过期 Artifact 可由 retention cleanup 删除。开发
+subprocess 明确标记为 development boundary；`ContainerSandboxBackend` 在 Docker/image runner 不可用时 fail
+closed，不将 Node subprocess 虚假宣传为 hostile-code production isolation。
+
+Phase 13 的 CI 仍运行 Phase 1–12 全部 build/typecheck/test/eval/soak。Phase 14 的 Multi-Agent planner、
+researcher、coder、reviewer 等 cognition 尚未实现。
+
+---
+
 # Phase 14 — Multi-Agent Extensions
 
 到这个阶段才考虑扩展：

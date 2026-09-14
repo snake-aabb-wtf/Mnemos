@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ArtifactBodyMissingError,
   ArtifactIntegrityError,
+  ArtifactQuotaExceededError,
   ArtifactQueryUnsupportedError,
   ArtifactSpillService,
   ContextManager,
@@ -212,5 +213,16 @@ describe("SqliteArtifactStore", () => {
       content: new Uint8Array([1, 2, 3]),
     })).rejects.toThrow();
     expect((await readdir(bodyDirectory)).filter((name) => name.endsWith(".blob"))).toEqual([]);
+  });
+
+  it("enforces a committed artifact disk quota without deleting canonical records", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mnemos-artifact-quota-"));
+    const bodyDirectory = join(directory, "bodies");
+    const store = new SqliteArtifactStore({ databasePath: join(directory, "runtime.sqlite"), storageDirectory: bodyDirectory, maxStorageBytes: 5 });
+    directories.push(directory);
+    stores.push(store);
+    const first = await store.create({ sessionId: "s", type: "small", content: new Uint8Array([1, 2, 3]) });
+    await expect(store.create({ sessionId: "s", type: "too-large", content: new Uint8Array([1, 2, 3]) })).rejects.toBeInstanceOf(ArtifactQuotaExceededError);
+    expect(await store.get(first.id)).toBeDefined();
   });
 });

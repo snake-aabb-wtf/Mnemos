@@ -8,6 +8,8 @@ import { ToolDispatcher, ToolRegistry, type ToolDispatchContext, type ToolPermis
 import { type ToolDiscoveryRuntime } from "./tool-discovery.js";
 import { contextModelInstructions } from "./context-policy.js";
 import { ptcModelInstructions, runCodeToolName, type PtcRuntime, type ToolExecutionMode } from "./ptc.js";
+import type { MetricsSink, Tracer } from "./observability.js";
+import { SessionMutex } from "./lifecycle.js";
 
 export interface HarnessToolRuntimeOptions {
   registry: ToolRegistry;
@@ -35,6 +37,8 @@ export interface HarnessOptions {
   events?: EventBus<HarnessEventMap>;
   systemPrompt?: string;
   logger?: Logger;
+  metrics?: MetricsSink;
+  tracer?: Tracer;
   toolRuntime?: HarnessToolRuntimeOptions;
 }
 
@@ -43,6 +47,9 @@ export class Harness {
   readonly events: EventBus<HarnessEventMap>;
   private readonly agent: VisibleAgent;
   private readonly logger: Logger;
+  private readonly metrics?: MetricsSink;
+  private readonly tracer?: Tracer;
+  private readonly sessionMutex = new SessionMutex();
   private readonly systemPrompt: string;
   private readonly compaction: CompactionService;
   private readonly toolRuntime?: Required<Omit<HarnessToolRuntimeOptions, "registry" | "dispatcher" | "ptc" | "executionMode" | "discovery">>
@@ -81,9 +88,18 @@ export class Harness {
       };
     }
     this.logger = options.logger ?? pino({ name: "mnemos" });
+    this.metrics = options.metrics;
+    this.tracer = options.tracer;
   }
 
   async send(sessionId: string, content: string): Promise<HistoryMessage> {
+    return this.sessionMutex.run(sessionId, () => this.sendUnlocked(sessionId, content));
+  }
+
+  private async sendUnlocked(sessionId: string, content: string): Promise<HistoryMessage> {
+    const startedAt = Date.now();
+    const span = this.tracer?.startSpan("harness.request", undefined, { sessionId, agentId: this.toolRuntime?.agentId ?? "visible-agent" });
+    this.metrics?.increment("requests.total");
     this.context.advanceTurn(sessionId);
     const received = await this.options.history.append({ sessionId, role: "user", content });
     await this.events.emit("message.received", { message: received });
@@ -94,7 +110,8 @@ export class Harness {
     let toolIterations = 0;
     while (true) {
       const preflight = await this.preflightContext(sessionId, prepared);
-      if (!preflight.safe) return this.appendAssistant(sessionId, "Context limit reached; the runtime could not safely reduce the working context before model invocation.");
+      if (!preflight.safe) { span?.end("error"); this.metrics?.increment("requests.failed", 1, { reason: "context_limit" }); return this.appendAssistant(sessionId, "Context limit reached; the runtime could not safely reduce the working context before model invocation."); }
+      this.metrics?.increment("model.calls");
       const response = await this.agent.respond({
         sessionId,
         input: content,
@@ -107,16 +124,16 @@ export class Harness {
         await this.emitEvictions(afterResponse);
         await this.emitContextEvents(sessionId, afterResponse.context.stats);
         this.logger.debug({ sessionId, messageId: generated.id }, "Generated model response");
-        return generated;
+        span?.end("ok"); this.metrics?.observe("request.duration_ms", Date.now() - startedAt); return generated;
       }
       if (!this.toolRuntime) {
-        return this.appendAssistant(sessionId, "Tool Runtime is not configured for this conversation.");
+        span?.end("error"); return this.appendAssistant(sessionId, "Tool Runtime is not configured for this conversation.");
       }
       if (toolIterations >= this.toolRuntime.maxToolIterations) {
-        return this.appendAssistant(sessionId, "Tool iteration limit reached before a final response.");
+        span?.end("error"); this.metrics?.increment("requests.failed", 1, { reason: "tool_iterations" }); return this.appendAssistant(sessionId, "Tool iteration limit reached before a final response.");
       }
       if (response.toolCalls.length === 0) {
-        return this.appendAssistant(sessionId, "The model returned an empty tool-call response.");
+        span?.end("error"); return this.appendAssistant(sessionId, "The model returned an empty tool-call response.");
       }
       await this.executeToolCalls(sessionId, response.toolCalls);
       toolIterations += 1;
@@ -171,6 +188,7 @@ export class Harness {
       allowedToolNames: this.dispatchableToolNames(sessionId),
     };
     for (const call of calls) {
+      this.metrics?.increment("tool.calls", 1, { tool: call.name });
       const transactionId = typeof call.id === "string" && call.id.length > 0 ? call.id : "invalid-tool-call";
       const requested = await this.options.history.append({
         sessionId,
@@ -180,6 +198,7 @@ export class Harness {
       });
       await this.events.emit("message.generated", { message: requested });
       const result = await this.toolRuntime.dispatcher.dispatch(call, context);
+      this.metrics?.increment(result.status === "success" ? "tool.successes" : "tool.failures", 1, { tool: call.name });
       await this.options.history.append({
         sessionId,
         role: "tool",

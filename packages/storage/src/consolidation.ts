@@ -24,11 +24,14 @@ interface StoredJob {
   created_at: string;
   updated_at: string;
   last_error: string | null;
+  lease_until: string | null;
+  worker_id: string | null;
 }
 
 function openJobDatabase(filename: string): Database.Database {
   const db = new Database(filename);
   db.pragma("journal_mode = WAL");
+  db.pragma("busy_timeout = 5000");
   db.pragma("foreign_keys = ON");
   return db;
 }
@@ -59,6 +62,8 @@ function migrateJobs(db: Database.Database): void {
   if (!columns.some((column) => column.name === "candidate_hints")) {
     db.exec("ALTER TABLE memory_consolidation_jobs ADD COLUMN candidate_hints TEXT NOT NULL DEFAULT '[]'");
   }
+  if (!columns.some((column) => column.name === "lease_until")) db.exec("ALTER TABLE memory_consolidation_jobs ADD COLUMN lease_until TEXT");
+  if (!columns.some((column) => column.name === "worker_id")) db.exec("ALTER TABLE memory_consolidation_jobs ADD COLUMN worker_id TEXT");
 }
 
 /**
@@ -130,6 +135,23 @@ export class SqliteConsolidationJobStore implements ConsolidationJobStore {
       if (result.changes !== 1) return undefined;
       return this.require(row.id);
     })();
+  }
+
+  /** Production worker variant: atomic worker ownership with an expiring lease. */
+  async claimNextLeased(workerId: string, leaseMs = 30_000, now = new Date()): Promise<ConsolidationJob | undefined> {
+    const nowIso = now.toISOString();
+    const leaseUntil = new Date(now.getTime() + leaseMs).toISOString();
+    return this.db.transaction(() => {
+      this.db.prepare("UPDATE memory_consolidation_jobs SET status='pending', lease_until=NULL, worker_id=NULL, updated_at=? WHERE status='running' AND lease_until IS NOT NULL AND lease_until <= ?").run(nowIso, nowIso);
+      const row = this.db.prepare("SELECT * FROM memory_consolidation_jobs WHERE status='pending' ORDER BY created_at ASC, rowid ASC LIMIT 1").get() as StoredJob | undefined;
+      if (!row) return undefined;
+      const result = this.db.prepare("UPDATE memory_consolidation_jobs SET status='running', lease_until=?, worker_id=?, attempts=attempts+1, updated_at=? WHERE id=? AND status='pending'").run(leaseUntil, workerId, nowIso, row.id);
+      return result.changes === 1 ? this.require(row.id) : undefined;
+    })();
+  }
+
+  async recoverExpiredLeases(now = new Date()): Promise<number> {
+    return this.db.prepare("UPDATE memory_consolidation_jobs SET status='pending', lease_until=NULL, worker_id=NULL, updated_at=?, last_error=COALESCE(last_error,'lease expired') WHERE status='running' AND lease_until IS NOT NULL AND lease_until <= ?").run(now.toISOString(), now.toISOString()).changes;
   }
 
   async complete(id: string): Promise<ConsolidationJob> {

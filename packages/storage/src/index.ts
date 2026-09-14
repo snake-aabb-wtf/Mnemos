@@ -5,3 +5,7 @@ export * from "./vector.js";
 export * from "./artifact.js";
 export * from "./entity.js";
 export * from "./intelligence.js";
+export * from "./job-queue.js";
+export * from "./audit.js";
+export * from "./migrations.js";
+export * from "./operational.js";

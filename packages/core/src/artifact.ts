@@ -146,6 +146,14 @@ export class ArtifactQueryUnsupportedError extends Error {
   }
 }
 
+export class ArtifactQuotaExceededError extends Error {
+  readonly code = "artifact_quota_exceeded";
+  constructor(readonly maxBytes: number) {
+    super(`Artifact storage quota exceeded (maximum ${maxBytes} bytes)`);
+    this.name = "ArtifactQuotaExceededError";
+  }
+}
+
 export const defaultArtifactSpillPolicy = {
   /** Text at or below this remains eligible for direct caller handling. */
   maxInlineBytes: 64 * 1024,

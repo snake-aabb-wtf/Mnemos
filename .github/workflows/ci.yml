@@ -66,3 +66,11 @@ jobs:
 
       - name: Run 10k-turn reliability soak
         run: pnpm eval:soak
+
+      - name: Run migration and doctor checks
+        env:
+          MNEMOS_DB_PATH: ${{ runner.temp }}/mnemos-ci.sqlite
+          MNEMOS_ARTIFACT_DIR: ${{ runner.temp }}/mnemos-ci-artifacts
+        run: |
+          pnpm mnemos migrate
+          pnpm mnemos doctor

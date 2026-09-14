@@ -21,6 +21,7 @@ export class SqliteMemoryIntelligenceAuditStore implements MemoryIntelligenceAud
   constructor(filename: string) {
     this.db = new Database(filename);
     this.db.pragma("journal_mode = WAL");
+    this.db.pragma("busy_timeout = 5000");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_intelligence_audit (
         id TEXT PRIMARY KEY,

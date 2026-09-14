@@ -4,11 +4,15 @@ Mnemos is a TypeScript cognitive-harness runtime. Its architectural direction an
 
 ## Current status
 
-**Phase 12 — Reliability & Evaluation is implemented.** The project currently provides:
+**Phase 13 — Production Hardening is implemented.** The project currently provides:
 
 - `@mnemos/core`: `Harness`, separate Visible and Hidden Agent abstractions over replaceable `ModelProvider` / `EmbeddingProvider` interfaces, Context Intelligence, Memory Intelligence, memory consolidation, hybrid retrieval / evaluation contracts, Artifact / spill contracts, and a provider-neutral Tool Runtime.
 - `@mnemos/storage`: SQLite-backed append-only `HistoryStore`, separate mutable `StateStore`, durable compaction checkpoints, SQLite/FTS5 Memory with migrations, a durable consolidation-job queue, rebuildable vector and entity-graph projections, memory-intelligence audit records, and filesystem-backed Artifacts.
 - `@mnemos/cli`: an interactive, persistent chat shell using the mock provider.
+
+Phase 13 adds production runtime boundaries without introducing new cognitive capabilities: validated configuration,
+secret redaction, durable SQLite job leases/workers, persistent compact tool audit, provider reliability policies,
+metrics/tracing/usage abstractions, health/readiness checks, migration tooling, and safe operational diagnostics.
 
 Phase 12 adds an offline reliability campaign rather than a new production service. The runtime now ships reusable
 `SeededRandom`, `SyntheticConversationGenerator`, `FaultInjectionController`, normalized replay snapshots, and
@@ -157,7 +161,7 @@ ToolExecutionMode is configurable per Harness: native exposes normal tools excep
 
 Each invocation gets a fresh Node child process, an empty environment, a private temporary working directory, Node Permission Model deny-by-default filesystem/child-process/worker/addon/WASI capabilities, bounded IPC, a V8 old-space limit, a parent-enforced wall-clock deadline, and cleanup after termination. TypeScript is stripped/transformed host-side; imports, require, process, direct network APIs, and other ambient-capability spellings are rejected before launch. The program can only use tools.*; no code parameter can add a permission.
 
-This is an isolated development backend, not a claim of production-grade hostile-code confinement. Node's Permission Model has no general OS-level network-deny switch, and language-level source rejection is defense in depth rather than a complete adversarial-JavaScript proof. Phase 13 should supply the same PtcSandbox interface with a container, gVisor, Firecracker, or equivalent network-isolated backend. Do not enable generated-code execution for mutually untrusted tenants on this backend.
+This is an isolated development backend, not a claim of production-grade hostile-code confinement. Node's Permission Model has no general OS-level network-deny switch, and language-level source rejection is defense in depth rather than a complete adversarial-JavaScript proof. Phase 13 supplies the same `PtcSandboxBackend` capability interface and a fail-closed container adapter, but this repository does not ship an enabled image-backed runner. Do not enable generated-code execution for mutually untrusted tenants until a separately reviewed Docker, gVisor, Firecracker, or equivalent network-isolated backend is configured.
 
 The memory setting is a V8 old-space ceiling for the child process, so Node/runtime minimums and external/native allocations can make it less precise than a cgroup/container memory limit. The parent still isolates a crash from Mnemos and converts obvious heap exhaustion into a structured PTC error; production hardening needs an OS-level memory controller.
 
@@ -195,7 +199,7 @@ With `Harness.toolRuntime.discovery`, native mode exposes the core plus loaded d
 
 Discovery state is process-local and session-scoped. Search/describe outputs and discovery events contain bounded metadata and schema hashes, not large tool results. Full schemas count against Context through the existing schema accounting. Internal tool calls remain in audit/history as ordinary tool calls; they are not silently injected as extra model turns.
 
-Phase 9 intentionally remains lexical and local. It does not add semantic embeddings, MCP, `tools.describe`-style dynamic external connectors, browser/shell access, or a production distributed sandbox. Those are later roadmap work (including the Phase 13 production PTC backend).
+Phase 9 intentionally remains lexical and local. It does not add semantic embeddings, MCP, `tools.describe`-style dynamic external connectors, browser/shell access, or a production distributed sandbox. Dynamic discovery remains a local derived index; sandbox hardening is documented separately under the current Phase 13 boundary.
 
 ## Context Intelligence
 
@@ -245,10 +249,42 @@ pnpm eval:context
 pnpm eval:memory
 pnpm eval:reliability
 pnpm eval:soak
+pnpm mnemos doctor
+pnpm mnemos migrate
+pnpm mnemos rebuild-indexes
 pnpm chat
 ```
 
 `pnpm chat` stores data in `./mnemos.sqlite` by default. Set `MNEMOS_DB_PATH` and `MNEMOS_SESSION_ID` to choose the database location and conversation session. The CLI intentionally remains a minimal mock chat host; embedders enable the native tool loop by supplying `ToolRegistry`, `ToolDispatcher`, and host-granted permissions to `Harness`.
+
+## Production runtime hardening
+
+`resolveRuntimeConfig()` owns the validated `development`/`test`/`production` profile. Precedence is defaults, config
+file, known environment overrides, then explicit runtime overrides; invalid values fail before runtime startup.
+`EnvironmentSecretProvider` is replaceable, and `redactSecrets()` is used by the in-memory structured logger and
+diagnostic-facing paths. Secrets are never intended to be written to History, compact audit rows, or diagnostics.
+
+`SqliteDurableJobQueue` provides transactional claim, worker leases, heartbeat, retry/failure transitions, expired-lease
+recovery, and WAL/busy-timeout configuration. `DurableWorker` bounds concurrency and stops claiming on shutdown.
+`SqliteToolAuditStore` persists only identifiers, status, duration, output kind, and error code; `cleanup()` enforces
+row/age retention independently of canonical History. `SqliteArtifactStore` can enforce a committed-body byte quota;
+expired artifacts are the only bodies eligible for automatic cleanup.
+
+Provider calls can use `ProviderReliabilityExecutor` for classified retry/backoff/jitter, rate/concurrency limiting,
+timeouts, circuit breaking, usage/cost accounting, and token/cost budget guards. `InMemoryMetricsSink` and
+`InMemoryTracer` are replaceable adapters, so no Prometheus or OpenTelemetry service is required for local operation.
+`RuntimeHealthService` separates cheap liveness from dependency readiness. The CLI exposes `mnemos doctor`, `mnemos
+migrate`, `mnemos rebuild-indexes`, and `mnemos diagnostics`.
+
+PTC now has an explicit `PtcSandboxBackend` capability boundary. The existing Node subprocess is labeled
+`development-subprocess`; `ContainerSandboxBackend` fails closed unless Docker is available and an image-backed runner
+is explicitly configured. This repository does not claim production hostile-code isolation on machines without that
+backend. Network remains denied and filesystem access is scratch-only by contract.
+
+`Dockerfile` and `docker-compose.yml` provide a minimal non-root, read-only-rootfs deployment example with a persistent
+`/data` volume and `mnemos doctor` healthcheck. The image runs the CLI runtime; it does not turn the CLI into an HTTP
+server, and Docker itself is not silently used as the PTC backend. Configure a separately reviewed container sandbox
+runner before enabling `production-container` for untrusted generated code.
 
 ## Reliability and evaluation
 
@@ -262,15 +298,14 @@ state, while History content, Memory provenance/status, compaction source ranges
 kept. Fault schedules are deterministic and can model throw, timeout, or malformed-return failures. Event subscribers
 are observational; a failing subscriber cannot invalidate a completed core operation.
 
-The campaign is not a claim of production hardening. Audit storage is still local, vector fallback is SQLite-based,
-and process-level PTC isolation remains the Phase 8 backend boundary. Distributed workers, production authentication,
-external observability, and stronger sandbox hosts remain Phase 13 work.
+The campaign is not a claim that every deployment concern is solved. Audit storage and metrics are local adapters,
+vector fallback is SQLite-based, and the available PTC container backend fails closed until an image-backed runner is
+configured. External observability, enterprise authentication, and a production sandbox fleet remain deployment work.
 
-## Phase 12 extension points
+## Phase 13 extension points
 
-The completed Phase 12 leaves stable boundaries for Phase 13 hardening: `ReliabilityInvariant`,
-`SyntheticConversationGenerator`, `FaultInjectionController`, normalized snapshots, `MemoryIntelligenceAuditStore`,
-`EntityGraphStore`, `MemoryDecayPolicy`, `MemoryIntelligenceService.runMaintenance()`, deterministic proposal
-schemas, and `MemoryVectorStore`/`EmbeddingProvider`/`MemoryReranker` replacement contracts. Dynamic discovery remains
-behind `ToolDiscoveryIndex.search`, `ToolDiscoveryRuntime.describe`, `LoadedToolSet`, and the existing
-`ToolDispatcher` permission gate. Phase 13 is not implemented.
+Phase 13 leaves stable boundaries for later deployment work: `DurableJobQueue`/`DurableWorker`,
+`SecretProvider`, `MetricsSink`, `Tracer`, `ProviderReliabilityExecutor`, `PtcSandboxBackend`,
+`SqliteMigrationRunner`, `RuntimeHealthService`, and the persistent `SqliteToolAuditStore`. Dynamic discovery and all
+tool authority remain behind `ToolDiscoveryIndex`, `LoadedToolSet`, and `ToolDispatcher`. Phase 14 Multi-Agent
+Extensions are not implemented.
