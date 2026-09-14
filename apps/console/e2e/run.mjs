@@ -57,7 +57,7 @@ try {
       runner.kill();
       if (process.platform === "win32" && runner.pid) spawn("taskkill", ["/pid", String(runner.pid), "/t", "/f"], { stdio: "ignore" });
       resolvePromise(passed ? 0 : 1);
-    }, 10_000);
+    }, 60_000);
     runner.once("error", () => { clearTimeout(cleanupTimer); resolvePromise(1); });
     runner.once("exit", (code) => { clearTimeout(cleanupTimer); resolvePromise(code ?? 1); });
   });

@@ -355,9 +355,9 @@ tool authority remain behind `ToolDiscoveryIndex`, `LoadedToolSet`, and `ToolDis
 Extensions consume these boundaries through `AgentRegistry`, `TaskManager`, `SqliteAgentTaskStore`,
 `MultiAgentOrchestrator`, `HandoffContextBuilder`, and `AgentArtifactWorkspace`. No Phase 15 is implemented.
 
-## Web Console — Frontend F1
+## Web Console — Frontend F2
 
-Frontend F1 (Console Foundation) is implemented as a small observer/workbench surface over the existing runtime; it
+Frontend F2 (Chat Workbench + Streaming) builds on the F1 observer surface over the existing runtime; it
 does not replace the Harness or become a second source of truth. The workspace now contains:
 
 - `packages/contracts`: Zod-authored, versioned public DTOs shared by the server and React client.
@@ -384,7 +384,21 @@ pnpm dev:console  # terminal 2, Vite on 127.0.0.1:5173
 
 Frontend verification is available through `pnpm test:server`, `pnpm test:console`, and `pnpm test:e2e` (Chromium).
 The full CI workflow runs these in addition to every existing backend build, test, and offline evaluation. Console
-assets are intentionally modest for F1 (the current Vite build is roughly 440 kB raw / 133 kB gzip); F2 streaming
-chat, F3 context/memory inspectors, F4 artifact/tool/PTC views, F5 task graph, and F6 dashboard polish remain
-pending. F1 deliberately does not add a chat composer, token streaming, Memory Explorer, Artifact browser, Monaco,
-React Flow, auth UI, or a provider key manager.
+assets remain intentionally modest (the exact bundle is reported by Vite). F3 context/memory inspectors, F4
+artifact/tool/PTC views, F5 task graph, and F6 dashboard polish remain pending. F2 deliberately does not add
+Monaco, Memory Explorer, Artifact browser, React Flow, auth UI, or a provider key manager.
+
+F2 adds a runtime-owned `ChatRuntimeService` boundary. The Fastify adapter exposes session creation, canonical
+message reads, message submission, retry/regenerate, cancellation, and a separate named SSE stream for assistant
+generation events (`started`, `text_delta`, `activity`, `completed`, `cancelled`, `failed`). The stream has a bounded
+replay buffer per generation, so a browser can safely POST first and subscribe immediately afterwards. The server
+never runs an Agent loop; production composition can inject a Harness-backed implementation, while the development
+and test profiles use the deterministic in-memory adapter.
+
+The Console chat route is a responsive three-column workbench: session rail, conversation/composer, and a compact
+runtime inspector. Conversation data remains TanStack Query server state; Zustand still stores UI preferences only.
+Markdown, fenced code blocks with copy, lists, tables, links, Enter-to-send/Shift+Enter, Stop, retry, activity chips,
+loading/error states, and refresh recovery are covered by offline tests and Chromium E2E. Demo prompts containing
+`[tool]`, `[ptc]`, `[compact]`, `[long]`, or `[fail]` exercise safe deterministic activity/failure fixtures; they are
+not production routing rules. Cancellation marks the assistant attempt as `cancelled` in the runtime-owned history,
+and retry appends a new attempt while preserving the original message.

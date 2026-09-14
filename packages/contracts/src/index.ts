@@ -110,6 +110,75 @@ export const sessionPageDtoSchema = z.object({
 }).strict();
 export type SessionPageDto = z.infer<typeof sessionPageDtoSchema>;
 
+/** Public conversational message. The server intentionally exposes only the
+ * model-visible content and bounded runtime metadata; canonical History stays
+ * behind the runtime adapter. */
+export const chatMessageRoleSchema = z.enum(["user", "assistant", "tool"]);
+export const chatMessageStatusSchema = z.enum(["completed", "streaming", "cancelled", "failed"]);
+export const chatMessageDtoSchema = z.object({
+  id: z.string().min(1),
+  sessionId: z.string().min(1),
+  role: chatMessageRoleSchema,
+  content: z.string().max(256_000),
+  status: chatMessageStatusSchema,
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  generationId: z.string().min(1).optional(),
+  attempt: z.number().int().positive().optional(),
+  retryOfMessageId: z.string().min(1).optional(),
+}).strict();
+export type ChatMessageDto = z.infer<typeof chatMessageDtoSchema>;
+
+export const createSessionInputSchema = z.object({
+  displayName: z.string().trim().min(1).max(160).optional(),
+}).strict();
+export type CreateSessionInput = z.infer<typeof createSessionInputSchema>;
+
+export const chatSendInputSchema = z.object({
+  content: z.string().trim().min(1).max(32_000),
+}).strict();
+export type ChatSendInput = z.infer<typeof chatSendInputSchema>;
+
+export const chatMessagesDtoSchema = z.object({
+  sessionId: z.string().min(1),
+  items: z.array(chatMessageDtoSchema).max(1_000),
+  nextCursor: z.string().min(1).optional(),
+}).strict();
+export type ChatMessagesDto = z.infer<typeof chatMessagesDtoSchema>;
+
+export const chatGenerationDtoSchema = z.object({
+  sessionId: z.string().min(1),
+  generationId: z.string().min(1),
+  userMessageId: z.string().min(1),
+  assistantMessageId: z.string().min(1),
+  status: z.literal("started"),
+}).strict();
+export type ChatGenerationDto = z.infer<typeof chatGenerationDtoSchema>;
+
+export const chatStreamEventTypeSchema = z.enum(["started", "text_delta", "activity", "completed", "cancelled", "failed"]);
+export type ChatStreamEventType = z.infer<typeof chatStreamEventTypeSchema>;
+export const chatActivitySchema = z.object({
+  kind: z.enum(["memory", "tool", "ptc", "context", "generation"]),
+  label: z.string().min(1).max(160),
+}).strict();
+export type ChatActivity = z.infer<typeof chatActivitySchema>;
+export const chatStreamEventDtoSchema = z.object({
+  id: z.string().min(1),
+  sessionId: z.string().min(1),
+  generationId: z.string().min(1),
+  type: chatStreamEventTypeSchema,
+  sequence: z.number().int().nonnegative(),
+  timestamp: z.string().datetime(),
+  messageId: z.string().min(1).optional(),
+  delta: z.string().max(8_192).optional(),
+  activity: chatActivitySchema.optional(),
+  message: chatMessageDtoSchema.optional(),
+  errorCode: z.string().min(1).max(96).optional(),
+}).strict();
+export type ChatStreamEventDto = z.infer<typeof chatStreamEventDtoSchema>;
+export const chatCancelResponseSchema = z.object({ status: z.literal("cancelling"), generationId: z.string().min(1) }).strict();
+export type ChatCancelResponse = z.infer<typeof chatCancelResponseSchema>;
+
 export const runtimeEventTypeSchema = z.enum([
   "runtime.started", "runtime.ready", "runtime.shutting_down", "runtime.stopped",
   "message.received", "message.generated",

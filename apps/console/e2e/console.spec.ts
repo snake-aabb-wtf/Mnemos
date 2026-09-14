@@ -4,21 +4,38 @@ test("walks the F1 observer path and receives a runtime event over SSE", async (
   await page.goto("/", { waitUntil: "commit", timeout: 10_000 });
   await expect(page.locator("#root > *")).toHaveCount(1, { timeout: 15_000 });
   await expect(page.getByRole("heading", { name: "A live view of your cognitive runtime." })).toBeVisible();
-  await expect(page.getByText("Ready to observe")).toBeVisible();
-
-  await page.getByRole("link", { name: "Sessions", exact: true }).first().click();
-  await expect(page.getByRole("heading", { name: "Working sets, not transcripts." })).toBeVisible();
-  await expect(page.getByText("Console smoke session")).toBeVisible();
-  await page.getByRole("link", { name: /Console smoke session/ }).click();
-  await expect(page.getByRole("heading", { name: "Console smoke session" })).toBeVisible();
-  await expect(page.getByText("F2 · chat pending")).toBeVisible();
-
+  await expect(page.getByText("Runtime status")).toBeVisible();
   await page.getByRole("link", { name: "Events", exact: true }).first().click();
   await expect(page.getByRole("heading", { name: "The runtime pulse, safely summarized." })).toBeVisible();
-  await expect(page.getByText(/Live|Reconnecting/)).toBeVisible();
   const seed = await request.post("http://127.0.0.1:4317/api/v1/dev/demo-session");
   expect(seed.ok()).toBeTruthy();
   await expect(page.locator("span.font-mono").filter({ hasText: "runtime.ready" })).toHaveCount(1, { timeout: 10_000 });
+  await page.goto("about:blank", { waitUntil: "commit", timeout: 5_000 });
+  await page.close();
+});
+
+test("creates a chat session, streams a response, and restores it after refresh", async ({ page }) => {
+  await page.goto("/sessions", { waitUntil: "commit", timeout: 10_000 });
+  await page.getByRole("button", { name: "New session" }).click();
+  await expect(page.getByRole("heading", { name: "New conversation" })).toBeVisible();
+  await page.getByLabel("Message Mnemos").fill("Explain context compaction [tool]");
+  await page.getByLabel("Message Mnemos").press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generation" })).toBeVisible();
+  await expect(page.getByText(/same chat contract used by a Harness-backed server/)).toBeVisible({ timeout: 10_000 });
+  await page.reload({ waitUntil: "commit" });
+  await expect(page.getByText("Explain context compaction [tool]", { exact: true })).toBeVisible();
+  await expect(page.getByText(/same chat contract used by a Harness-backed server/)).toBeVisible();
+  await page.goto("about:blank", { waitUntil: "commit", timeout: 5_000 });
+  await page.close();
+});
+
+test("stops an active generation and records cancelled status", async ({ page }) => {
+  await page.goto("/sessions/demo-session-01", { waitUntil: "commit", timeout: 10_000 });
+  await page.getByLabel("Message Mnemos").fill("Stream this slowly [long]");
+  await page.getByLabel("Message Mnemos").press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generation" })).toBeVisible();
+  await page.getByRole("button", { name: "Stop generation" }).click();
+  await expect(page.getByText("cancelled", { exact: true })).toBeVisible({ timeout: 10_000 });
   await page.goto("about:blank", { waitUntil: "commit", timeout: 5_000 });
   await page.close();
 });

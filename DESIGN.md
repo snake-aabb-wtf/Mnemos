@@ -1763,9 +1763,9 @@ Phase 14 的运行边界明确为 bounded、observable、permission-aware、budg
 
 ---
 
-# Frontend Console Architecture (F1)
+# Frontend Console Architecture (F2)
 
-Frontend F1 adds a deliberately thin Web Console without changing the runtime source-of-truth rules. The Harness,
+Frontend F1 established a deliberately thin Web Console without changing the runtime source-of-truth rules. The Harness,
 canonical History, Memory, Artifacts, tasks, and policy remain authoritative; the browser is an observer/workbench
 client and the Fastify server is an adapter boundary, not a second runtime. The boundary is:
 
@@ -1777,9 +1777,9 @@ Runtime services → injected ConsoleRuntimeService → Fastify /api/v1 → shar
 `packages/contracts` owns public versioned DTO schemas and inferred types. `apps/server` performs request/query/body
 validation, request IDs, CORS, public mapping, error translation, and SSE lifecycle. It must not instantiate a second
 Harness or expose internal domain objects. `apps/console` uses React 19, Vite, TanStack Router, TanStack Query for
-server state, Zustand for UI-only state, Tailwind, and local shadcn-style primitives. F1 routes are Overview,
-Sessions, session detail shell, Events, and read-only Settings. Chat streaming, Memory/Context inspectors,
-Artifact/Tool/PTC UI, task graphs, and dashboard polish are deliberately staged for F2–F6.
+server state, Zustand for UI-only state, Tailwind, and local shadcn-style primitives. F1 routes were Overview,
+Sessions, session detail shell, Events, and read-only Settings. Memory/Context inspectors, Artifact/Tool/PTC UI, task
+graphs, and dashboard polish are deliberately staged for F3–F6.
 
 The F1 event stream is named SSE over the existing EventBus. Only an explicit allowlist of safe lifecycle metadata is
 mapped; prompts, secrets, raw tool arguments, paths, and large result bodies are excluded or bounded. The stream has
@@ -1789,6 +1789,40 @@ being a canonical audit store. CORS is explicit, and the deterministic demo seed
 The console is developed and tested without provider credentials. A deterministic in-memory runtime fixture supports
 REST/SSE integration and Chromium Playwright smoke tests. Production hosts inject a real runtime service and place
 authentication/authorization at the deployment boundary until a later frontend phase defines those controls.
+
+## Frontend F2 — Chat Workbench + Streaming
+
+F2 adds a chat surface without moving runtime ownership into the web layer. The public boundary is:
+
+```text
+React Chat Workbench
+        │ REST commands + chat SSE
+        ▼
+Fastify Console Adapter
+        │ validates shared contracts
+        ▼
+ChatRuntimeService
+        │
+        ├── Harness-backed production implementation (injected)
+        └── deterministic DemoConsoleRuntimeService (offline/dev/test)
+```
+
+The server exposes session creation, canonical message reads, user message submission, retry/regenerate, generation
+cancellation, and a separate named SSE endpoint for assistant output. Chat stream events are `started`, `text_delta`,
+`activity`, `completed`, `cancelled`, and `failed`. Runtime EventBus SSE remains a metadata-only diagnostic channel;
+assistant text is never smuggled into runtime-event payloads. A bounded per-generation replay buffer closes the
+POST/subscribe race without turning the browser into an audit store.
+
+`ChatRuntimeService` owns generation lifecycle and canonical message state. Cancellation calls the runtime's abort
+boundary and terminally marks the assistant attempt; it is not a UI-only hide operation. Retry creates a new assistant
+attempt with `retryOfMessageId` and preserves the original message. A production adapter should pass the signal into
+Harness/provider/tool/PTC cancellation paths; the offline adapter uses a deterministic scripted provider-like loop so
+the same API and E2E contract can run without API keys.
+
+The workbench uses TanStack Query for sessions/messages and Zustand only for UI preferences. It renders bounded
+Markdown (fenced code with copy, lists, tables, and links), safe activity labels, and a summary inspector for current
+agent, pressure, memory, tool, and PTC counts. It intentionally does not implement F3 context/memory inspectors,
+F4 artifact/tool/PTC explorers, F5 task graphs, or F6 dashboard work.
 
 ---
 

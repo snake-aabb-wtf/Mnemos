@@ -1,5 +1,10 @@
 import {
   apiErrorResponseSchema,
+  chatCancelResponseSchema,
+  chatGenerationDtoSchema,
+  chatMessagesDtoSchema,
+  chatStreamEventDtoSchema,
+  createSessionInputSchema,
   healthDtoSchema,
   metaDtoSchema,
   paginationQuerySchema,
@@ -9,12 +14,19 @@ import {
   sessionDetailDtoSchema,
   sessionPageDtoSchema,
   type HealthDto,
+  type ChatCancelResponse,
+  type ChatGenerationDto,
+  type ChatMessagesDto,
+  type ChatStreamEventDto,
+  type CreateSessionInput,
   type MetaDto,
   type ReadinessDto,
   type RuntimeEventDto,
   type RuntimeSummaryDto,
   type SessionDetailDto,
   type SessionPageDto,
+  sessionSummaryDtoSchema,
+  type SessionSummaryDto,
 } from "@mnemos/contracts";
 
 const baseUrl = (import.meta.env.VITE_MNEMOS_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
@@ -49,12 +61,31 @@ export const api = {
   ready: (): Promise<ReadinessDto> => requestJson("/api/v1/ready", readinessDtoSchema),
   summary: (): Promise<RuntimeSummaryDto> => requestJson("/api/v1/runtime/summary", runtimeSummaryDtoSchema),
   sessions: (query: { limit?: number; cursor?: string } = {}): Promise<SessionPageDto> => {
-    const parsed = paginationQuerySchema.parse(query);
+    const parsed = paginationQuerySchema.parse({ ...query, ...(query.limit === undefined ? {} : { limit: Math.min(query.limit, 100) }) });
     const params = new URLSearchParams({ limit: String(parsed.limit), ...(parsed.cursor ? { cursor: parsed.cursor } : {}) });
     return requestJson(`/api/v1/sessions?${params.toString()}`, sessionPageDtoSchema);
   },
   session: (sessionId: string): Promise<SessionDetailDto> => requestJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, sessionDetailDtoSchema),
+  createSession: (input: CreateSessionInput = {}): Promise<SessionSummaryDto> => requestJson("/api/v1/sessions", sessionSummaryDtoSchema, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(createSessionInputSchema.parse(input)) }),
+  messages: (sessionId: string, query: { limit?: number; cursor?: string } = {}): Promise<ChatMessagesDto> => {
+    const parsed = paginationQuerySchema.parse({ ...query, ...(query.limit === undefined ? {} : { limit: Math.min(query.limit, 100) }) });
+    const params = new URLSearchParams({ limit: String(parsed.limit), ...(parsed.cursor ? { cursor: parsed.cursor } : {}) });
+    return requestJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages?${params.toString()}`, chatMessagesDtoSchema);
+  },
+  sendMessage: (sessionId: string, content: string): Promise<ChatGenerationDto> => requestJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, chatGenerationDtoSchema, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content }) }),
+  retryMessage: (sessionId: string, messageId: string): Promise<ChatGenerationDto> => requestJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/retry`, chatGenerationDtoSchema, { method: "POST" }),
+  cancelGeneration: (sessionId: string, generationId: string): Promise<ChatCancelResponse> => requestJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/generations/${encodeURIComponent(generationId)}/cancel`, chatCancelResponseSchema, { method: "POST" }),
 };
+
+export function subscribeToChatStream(sessionId: string, generationId: string, onEvent: (event: ChatStreamEventDto) => void, onStatus?: (status: "live" | "closed" | "error") => void): () => void {
+  const source = new EventSource(apiUrl(`/api/v1/sessions/${encodeURIComponent(sessionId)}/generations/${encodeURIComponent(generationId)}/events`));
+  const eventTypes = ["started", "text_delta", "activity", "completed", "cancelled", "failed"] as const;
+  const handle = (message: MessageEvent<string>): void => { try { const parsed = chatStreamEventDtoSchema.safeParse(JSON.parse(message.data)); if (parsed.success) { onStatus?.("live"); onEvent(parsed.data); } } catch { onStatus?.("error"); } };
+  for (const type of eventTypes) source.addEventListener(`chat.${type}`, handle);
+  source.onopen = () => onStatus?.("live");
+  source.onerror = () => onStatus?.(source.readyState === EventSource.CLOSED ? "error" : "closed");
+  return () => { for (const type of eventTypes) source.removeEventListener(`chat.${type}`, handle); source.close(); };
+}
 
 export function subscribeToEvents(onEvent: (event: RuntimeEventDto) => void, onStatus: (status: "live" | "reconnecting" | "disconnected") => void): () => void {
   const source = new EventSource(apiUrl("/api/v1/events"));

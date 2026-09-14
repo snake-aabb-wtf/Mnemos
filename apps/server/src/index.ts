@@ -5,6 +5,11 @@ import cors from "@fastify/cors";
 import {
   apiErrorResponseSchema,
   apiVersion,
+  chatMessagesDtoSchema,
+  chatGenerationDtoSchema,
+  chatSendInputSchema,
+  chatStreamEventDtoSchema,
+  createSessionInputSchema,
   demoSessionResponseSchema,
   healthDtoSchema,
   metaDtoSchema,
@@ -16,11 +21,12 @@ import {
   sessionParamsSchema,
   sessionDetailDtoSchema,
   sessionPageDtoSchema,
+  sessionSummaryDtoSchema,
   type RuntimeEventDto,
   type RuntimeEventType,
 } from "@mnemos/contracts";
 import type { HarnessEventMap } from "@mnemos/core";
-import { DemoConsoleRuntimeService, type ConsoleRuntimeService } from "./runtime.js";
+import { DemoConsoleRuntimeService, type ChatRuntimeService, type ConsoleRuntimeService } from "./runtime.js";
 
 export interface WebAccessPolicy {
   profile?: "development" | "test" | "production";
@@ -86,10 +92,50 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     return sendDto(reply, sessionPageDtoSchema, await runtime.listSessions(query));
   });
   app.get<{ Params: { sessionId: string } }>(`/api/${apiVersion}/sessions/:sessionId`, async (request, reply) => {
-    const { sessionId } = sessionParamsSchema.parse(request.params);
+    const sessionId = routeId(request.params.sessionId, "session");
     const session = await runtime.getSession(sessionId);
     if (session === undefined) throw httpError(404, "not_found", "Session not found.");
     return sendDto(reply, sessionDetailDtoSchema, session);
+  });
+  app.post(`/api/${apiVersion}/sessions`, async (request, reply) => {
+    const chat = requireChatRuntime(runtime);
+    const input = createSessionInputSchema.parse(request.body ?? {});
+    return sendDto(reply.code(201), sessionSummaryDtoSchema, await chat.createSession(input));
+  });
+  app.get<{ Params: { sessionId: string } }>(`/api/${apiVersion}/sessions/:sessionId/messages`, async (request, reply) => {
+    const chat = requireChatRuntime(runtime);
+    const { sessionId } = sessionParamsSchema.parse(request.params);
+    const query = paginationQuerySchema.parse(request.query);
+    if (query.cursor !== undefined && decodeCursor(query.cursor) < 0) throw httpError(400, "invalid_request", "Invalid cursor.");
+    const messages = await chat.listMessages(sessionId, query);
+    if (messages === undefined) throw httpError(404, "not_found", "Session not found.");
+    return sendDto(reply, chatMessagesDtoSchema, messages);
+  });
+  app.post<{ Params: { sessionId: string } }>(`/api/${apiVersion}/sessions/:sessionId/messages`, async (request, reply) => {
+    const chat = requireChatRuntime(runtime);
+    const { sessionId } = sessionParamsSchema.parse(request.params);
+    const input = chatSendInputSchema.parse(request.body);
+    return sendDto(reply.code(202), chatGenerationDtoSchema, await chat.startGeneration(sessionId, input.content));
+  });
+  app.post<{ Params: { sessionId: string; messageId: string } }>(`/api/${apiVersion}/sessions/:sessionId/messages/:messageId/retry`, async (request, reply) => {
+    const chat = requireChatRuntime(runtime);
+    const sessionId = routeId(request.params.sessionId, "session");
+    const messageId = routeId(request.params.messageId, "message");
+    return sendDto(reply.code(202), chatGenerationDtoSchema, await chat.startGeneration(sessionId, "", messageId));
+  });
+  app.post<{ Params: { sessionId: string; generationId: string } }>(`/api/${apiVersion}/sessions/:sessionId/generations/:generationId/cancel`, async (request, reply) => {
+    const chat = requireChatRuntime(runtime);
+    const sessionId = routeId(request.params.sessionId, "session");
+    const generationId = routeId(request.params.generationId, "generation");
+    const cancelled = await chat.cancelGeneration(sessionId, generationId);
+    if (!cancelled) throw httpError(409, "generation_not_active", "Generation is no longer active.");
+    return reply.send({ status: "cancelling", generationId });
+  });
+  app.get<{ Params: { sessionId: string; generationId: string } }>(`/api/${apiVersion}/sessions/:sessionId/generations/:generationId/events`, (request, reply) => {
+    const chat = requireChatRuntime(runtime);
+    const sessionId = routeId(request.params.sessionId, "session");
+    const generationId = routeId(request.params.generationId, "generation");
+    return openChatStream(chat, sessionId, generationId, request, reply);
   });
   app.post(`/api/${apiVersion}/dev/demo-session`, async (_request, reply) => {
     if (!allowDemoSession || runtime.createDemoSession === undefined) throw httpError(404, "not_found", "Demo session is disabled.");
@@ -206,4 +252,37 @@ function stringField(raw: unknown, key: string): string | undefined {
 function decodeCursor(cursor: string): number {
   const value = Number(Buffer.from(cursor, "base64url").toString("utf8"));
   return Number.isInteger(value) && value >= 0 ? value : -1;
+}
+
+function routeId(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length < 1 || value.length > 256) throw httpError(400, "invalid_request", `Invalid ${label} id.`);
+  return value;
+}
+
+function requireChatRuntime(runtime: ConsoleRuntimeService): ChatRuntimeService {
+  if ("createSession" in runtime && typeof runtime.createSession === "function" && "startGeneration" in runtime && typeof runtime.startGeneration === "function") return runtime as ChatRuntimeService;
+  throw httpError(503, "chat_unavailable", "Chat runtime is not configured.");
+}
+
+function openChatStream(runtime: ChatRuntimeService, sessionId: string, generationId: string, request: FastifyRequest, reply: FastifyReply): void {
+  reply.hijack();
+  const response = reply.raw;
+  response.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-request-id": request.id });
+  response.write(": mnemos chat stream connected\n\n");
+  let closed = false;
+  let unsubscribe = (): void => undefined;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  const close = (): void => { if (closed) return; closed = true; if (heartbeat !== undefined) clearInterval(heartbeat); unsubscribe(); if (!response.destroyed) response.end(); };
+  heartbeat = setInterval(() => { if (!closed) response.write(`: heartbeat ${Date.now()}\n\n`); }, 15_000);
+  unsubscribe = runtime.subscribeGeneration(sessionId, generationId, (event) => {
+    if (closed) return;
+    const parsed = chatStreamEventDtoSchema.safeParse(event);
+    if (!parsed.success) return;
+    try {
+      response.write(`id: ${parsed.data.id}\nevent: chat.${parsed.data.type}\ndata: ${JSON.stringify(parsed.data)}\n\n`);
+      if (["completed", "cancelled", "failed"].includes(parsed.data.type)) close();
+    } catch { close(); }
+  });
+  const closeWithHeartbeat = (): void => close();
+  request.raw.on("close", closeWithHeartbeat);
 }

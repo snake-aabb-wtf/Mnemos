@@ -2,8 +2,8 @@ import { useState, type ButtonHTMLAttributes, type HTMLAttributes, type PropsWit
 import { Check, Copy, LoaderCircle } from "lucide-react";
 import { shortId } from "../lib/format";
 
-export function Button({ className = "", variant = "default", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "default" | "quiet" | "outline" }): JSX.Element {
-  const variants = { default: "bg-amber-400 text-zinc-950 hover:bg-amber-300", quiet: "bg-transparent text-ink-muted hover:bg-ink/5 dark:hover:bg-white/10", outline: "border border-line bg-transparent text-ink hover:border-amber-400/60 hover:text-amber-500" };
+export function Button({ className = "", variant = "default", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "default" | "quiet" | "outline" | "danger" }): JSX.Element {
+  const variants = { default: "bg-amber-400 text-zinc-950 hover:bg-amber-300", quiet: "bg-transparent text-ink-muted hover:bg-ink/5 dark:hover:bg-white/10", outline: "border border-line bg-transparent text-ink hover:border-amber-400/60 hover:text-amber-500", danger: "border border-red-500/30 bg-red-500/10 text-red-700 hover:bg-red-500/15 dark:text-red-300" };
   return <button className={`inline-flex min-h-9 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/80 disabled:cursor-not-allowed disabled:opacity-45 ${variants[variant]} ${className}`} {...props} />;
 }
 

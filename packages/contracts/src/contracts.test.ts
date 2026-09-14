@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   apiErrorResponseSchema,
+  chatMessageDtoSchema,
+  chatStreamEventDtoSchema,
   metaDtoSchema,
   paginationQuerySchema,
   runtimeEventDtoSchema,
@@ -64,5 +66,12 @@ describe("shared console contracts", () => {
       timestamp: "2026-09-14T00:00:00.000Z",
       payload: {},
     })).toThrow();
+  });
+
+  it("validates chat messages and bounded stream events", () => {
+    const message = chatMessageDtoSchema.parse({ id: "m-1", sessionId: "s-1", role: "assistant", content: "hello", status: "completed", createdAt: "2026-09-14T00:00:00.000Z", updatedAt: "2026-09-14T00:00:00.000Z" });
+    expect(message.status).toBe("completed");
+    expect(chatStreamEventDtoSchema.parse({ id: "evt-1", sessionId: "s-1", generationId: "g-1", type: "text_delta", sequence: 1, timestamp: "2026-09-14T00:00:00.000Z", messageId: "m-1", delta: "hi" })).toMatchObject({ type: "text_delta" });
+    expect(() => chatStreamEventDtoSchema.parse({ id: "evt-2", sessionId: "s-1", generationId: "g-1", type: "secret", sequence: 1, timestamp: "2026-09-14T00:00:00.000Z" })).toThrow();
   });
 });

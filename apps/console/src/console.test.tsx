@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RouterProvider } from "@tanstack/react-router";
-import { router } from "./router";
+import { MarkdownMessage, router } from "./router";
 import { useUiStore } from "./lib/ui-store";
 
 const now = "2026-09-14T00:00:00.000Z";
@@ -29,7 +29,7 @@ describe("Console foundation", () => {
   it("renders overview loading then real runtime summary", async () => {
     await renderRoute("/");
     expect(await screen.findByText("A live view of your cognitive runtime.")).toBeInTheDocument();
-    expect(await screen.findByText("Ready to observe")).toBeInTheDocument();
+    expect(await screen.findByText("Runtime status")).toBeInTheDocument();
     expect(screen.getAllByText("Sessions").length).toBeGreaterThan(0);
   });
 
@@ -49,5 +49,13 @@ describe("Console foundation", () => {
     useUiStore.getState().setTheme("dark");
     await waitFor(() => expect(useUiStore.getState().theme).toBe("dark"));
     expect(useUiStore.getState().theme).toBe("dark");
+  });
+
+  it("renders safe markdown blocks and code copy affordance", () => {
+    render(<MarkdownMessage text={"**Answer**\n\n```ts\nconst value = 1;\n```\n\n- one\n- two"} />);
+    expect(screen.getByText("Answer")).toBeInTheDocument();
+    expect(screen.getByText("const value = 1;")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    expect(screen.getByText("one")).toBeInTheDocument();
   });
 });
