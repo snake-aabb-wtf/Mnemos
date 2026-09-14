@@ -117,7 +117,7 @@ export class SqliteConsolidationJobStore implements ConsolidationJobStore {
       const row = this.db.prepare(`
         SELECT * FROM memory_consolidation_jobs
         WHERE status = 'pending'
-        ORDER BY created_at ASC, id ASC
+        ORDER BY created_at ASC, rowid ASC
         LIMIT 1
       `).get() as StoredJob | undefined;
       if (!row) return undefined;
@@ -156,11 +156,11 @@ export class SqliteConsolidationJobStore implements ConsolidationJobStore {
   async list(statuses?: readonly ConsolidationJobStatus[]): Promise<ConsolidationJob[]> {
     if (statuses !== undefined && statuses.length === 0) return [];
     const rows = statuses === undefined
-      ? this.db.prepare("SELECT * FROM memory_consolidation_jobs ORDER BY created_at ASC, id ASC").all()
+      ? this.db.prepare("SELECT * FROM memory_consolidation_jobs ORDER BY created_at ASC, rowid ASC").all()
       : this.db.prepare(`
         SELECT * FROM memory_consolidation_jobs
         WHERE status IN (${statuses.map(() => "?").join(", ")})
-        ORDER BY created_at ASC, id ASC
+        ORDER BY created_at ASC, rowid ASC
       `).all(...statuses);
     return (rows as StoredJob[]).map((row) => this.toJob(row));
   }
