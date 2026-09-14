@@ -355,9 +355,9 @@ tool authority remain behind `ToolDiscoveryIndex`, `LoadedToolSet`, and `ToolDis
 Extensions consume these boundaries through `AgentRegistry`, `TaskManager`, `SqliteAgentTaskStore`,
 `MultiAgentOrchestrator`, `HandoffContextBuilder`, and `AgentArtifactWorkspace`. No Phase 15 is implemented.
 
-## Web Console — Frontend F2
+## Web Console — Frontend F3
 
-Frontend F2 (Chat Workbench + Streaming) builds on the F1 observer surface over the existing runtime; it
+Frontend F3 (Context + Memory Inspector) builds on the F2 chat workbench and F1 observer surface over the existing runtime; it
 does not replace the Harness or become a second source of truth. The workspace now contains:
 
 - `packages/contracts`: Zod-authored, versioned public DTOs shared by the server and React client.
@@ -384,9 +384,10 @@ pnpm dev:console  # terminal 2, Vite on 127.0.0.1:5173
 
 Frontend verification is available through `pnpm test:server`, `pnpm test:console`, and `pnpm test:e2e` (Chromium).
 The full CI workflow runs these in addition to every existing backend build, test, and offline evaluation. Console
-assets remain intentionally modest (the exact bundle is reported by Vite). F3 context/memory inspectors, F4
-artifact/tool/PTC views, F5 task graph, and F6 dashboard polish remain pending. F2 deliberately does not add
-Monaco, Memory Explorer, Artifact browser, React Flow, auth UI, or a provider key manager.
+assets remain intentionally modest (the exact bundle is reported by Vite). F4 artifact/tool/PTC views, F5 task
+graph, and F6 dashboard polish remain pending. F3 adds read-only Context telemetry, pressure/policy breakdown,
+pin and compaction timelines, a Memory Explorer, retrieval explanations, and canonical History provenance links;
+it deliberately does not add Monaco, Artifact browser, React Flow, auth UI, or a provider key manager.
 
 F2 adds a runtime-owned `ChatRuntimeService` boundary. The Fastify adapter exposes session creation, canonical
 message reads, message submission, retry/regenerate, cancellation, and a separate named SSE stream for assistant
@@ -402,3 +403,11 @@ loading/error states, and refresh recovery are covered by offline tests and Chro
 `[tool]`, `[ptc]`, `[compact]`, `[long]`, or `[fail]` exercise safe deterministic activity/failure fixtures; they are
 not production routing rules. Cancellation marks the assistant attempt as `cancelled` in the runtime-owned history,
 and retry appends a new attempt while preserving the original message.
+
+F3 extends the inspector with runtime-owned, bounded read APIs: `/sessions/:id/context`, `/memory`, memory detail and
+source endpoints, retrieval explanations, and session-scoped canonical History navigation. Context composition reports
+system, pins, recent raw, retrieved memory, tool results, schemas, artifact handles, reserve, safe headroom, pressure
+level, policy actions, pins, and compaction source ranges. The `/memory` Explorer exposes lifecycle status, confidence,
+reinforcement, stale state, scope, timeline, and provenance without making the browser a second source of truth.
+The deterministic demo fixtures are offline-only; production adapters must map the same DTOs from real ContextManager,
+MemoryRetriever, MemoryStore, and HistoryStore implementations.

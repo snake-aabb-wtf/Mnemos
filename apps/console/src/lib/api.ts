@@ -27,6 +27,20 @@ import {
   type SessionPageDto,
   sessionSummaryDtoSchema,
   type SessionSummaryDto,
+  contextInspectorDtoSchema,
+  memoryInspectorQuerySchema,
+  memoryPageDtoSchema,
+  memoryDetailDtoSchema,
+  memorySourceDtoSchema,
+  historyMessageDtoSchema,
+  retrievalInspectorDtoSchema,
+  type ContextInspectorDto,
+  type MemoryDetailDto,
+  type MemoryInspectorQuery,
+  type MemoryPageDto,
+  type MemorySourceDto,
+  type HistoryMessageDto,
+  type RetrievalInspectorDto,
 } from "@mnemos/contracts";
 
 const baseUrl = (import.meta.env.VITE_MNEMOS_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
@@ -74,7 +88,17 @@ export const api = {
   },
   sendMessage: (sessionId: string, content: string): Promise<ChatGenerationDto> => requestJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, chatGenerationDtoSchema, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content }) }),
   retryMessage: (sessionId: string, messageId: string): Promise<ChatGenerationDto> => requestJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/retry`, chatGenerationDtoSchema, { method: "POST" }),
-  cancelGeneration: (sessionId: string, generationId: string): Promise<ChatCancelResponse> => requestJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/generations/${encodeURIComponent(generationId)}/cancel`, chatCancelResponseSchema, { method: "POST" }),
+ cancelGeneration: (sessionId: string, generationId: string): Promise<ChatCancelResponse> => requestJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/generations/${encodeURIComponent(generationId)}/cancel`, chatCancelResponseSchema, { method: "POST" }),
+  context: (sessionId: string): Promise<ContextInspectorDto> => requestJson("/api/v1/sessions/" + encodeURIComponent(sessionId) + "/context", contextInspectorDtoSchema),
+  memorySearch: (query: Partial<MemoryInspectorQuery> = {}): Promise<MemoryPageDto> => {
+    const parsed = memoryInspectorQuerySchema.parse(query); const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(parsed)) if (value !== undefined && value !== "") params.set(key, String(value));
+    return requestJson("/api/v1/memory?" + params.toString(), memoryPageDtoSchema);
+  },
+  memory: (memoryId: string): Promise<MemoryDetailDto> => requestJson("/api/v1/memory/" + encodeURIComponent(memoryId), memoryDetailDtoSchema),
+  memorySources: (memoryId: string): Promise<MemorySourceDto[]> => requestJson("/api/v1/memory/" + encodeURIComponent(memoryId) + "/sources", memorySourceDtoSchema.array()),
+  historyMessage: (sessionId: string, messageId: string): Promise<HistoryMessageDto> => requestJson("/api/v1/sessions/" + encodeURIComponent(sessionId) + "/history/" + encodeURIComponent(messageId), historyMessageDtoSchema),
+  retrieval: (sessionId: string, messageId: string): Promise<RetrievalInspectorDto> => requestJson("/api/v1/sessions/" + encodeURIComponent(sessionId) + "/messages/" + encodeURIComponent(messageId) + "/retrieval", retrievalInspectorDtoSchema),
 };
 
 export function subscribeToChatStream(sessionId: string, generationId: string, onEvent: (event: ChatStreamEventDto) => void, onStatus?: (status: "live" | "closed" | "error") => void): () => void {

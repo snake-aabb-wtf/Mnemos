@@ -1824,6 +1824,30 @@ Markdown (fenced code with copy, lists, tables, and links), safe activity labels
 agent, pressure, memory, tool, and PTC counts. It intentionally does not implement F3 context/memory inspectors,
 F4 artifact/tool/PTC explorers, F5 task graphs, or F6 dashboard work.
 
+## Frontend F3 — Context + Memory Inspector
+
+F3 keeps the Console a read-only adapter over the runtime-owned working set. The server exposes bounded, Zod-validated
+DTOs for session Context telemetry, Memory search/detail/source tracing, retrieval explanations, and canonical History
+message navigation. A production composition must map these DTOs from the existing `ContextManager`,
+`ContextPolicyEngine`, `CompactionService`, `MemoryStore`/`MemoryRetriever`, and `HistoryStore`; the browser must not
+recalculate token usage or become a source of truth.
+
+The Context Inspector reports the real token composition (system, pinned, recent raw, retrieved memory, tool results,
+tool schemas, artifact handles), context limit, reserve, available/safe headroom, pressure level, effective recent/raw
+and retrieval targets, typed policy recommendations/enforcement, session pins, and compaction records. Compaction
+records retain semantic boundary kind, source range, before/after estimates, automatic-pin update, and links to the
+canonical History cutoff. Pins are displayed with source, token estimate, priority, and TTL; no mutation capability is
+exposed in F3.
+
+The Memory Explorer provides bounded query/filter/pagination, lifecycle state, confidence, reinforcement, stale state,
+scope, related/timeline data, and source references. Provenance navigation follows `Memory → source reference →
+canonical History`; source content is bounded and read-only. Retrieval explanations include rank, score, matched-by
+signals, and signal contributions only when the runtime exposes them. The demo adapter uses deterministic offline
+fixtures for browser tests; it is not a production persistence implementation.
+
+F3 does not implement Artifact, Tool/PTC, Multi-Agent Task Graph, or dashboard inspectors (F4–F6). It also does not
+expose raw prompts, hidden reasoning, secrets, large tool bodies, or private runtime internals.
+
 ---
 
 # 21. 核心不可违反原则

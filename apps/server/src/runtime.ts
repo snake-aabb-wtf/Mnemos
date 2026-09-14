@@ -5,6 +5,9 @@ import {
   metaDtoSchema, runtimeSummaryDtoSchema, sessionDetailDtoSchema, sessionPageDtoSchema, sessionSummaryDtoSchema,
   type ChatActivity, type ChatGenerationDto, type ChatMessageDto, type ChatMessagesDto, type ChatStreamEventDto,
   type CreateSessionInput, type MetaDto, type RuntimeSummaryDto, type SessionDetailDto, type SessionPageDto, type SessionSummaryDto,
+  contextInspectorDtoSchema, memoryDetailDtoSchema, memoryInspectorQuerySchema, memoryPageDtoSchema, memorySourceDtoSchema,
+  historyMessageDtoSchema, retrievalInspectorDtoSchema, type ContextInspectorDto, type MemoryDetailDto, type MemoryInspectorQuery,
+  type MemoryPageDto, type MemorySourceDto, type HistoryMessageDto, type RetrievalInspectorDto, type MemorySummaryDto,
 } from "@mnemos/contracts";
 
 export interface SessionQuery { limit: number; cursor?: string; }
@@ -28,6 +31,17 @@ export interface ChatRuntimeService extends ConsoleRuntimeService {
   cancelGeneration(sessionId: string, generationId: string): Promise<boolean>;
 }
 
+/** Read-only observability boundary for F3. Implementations map their real
+ * ContextManager/MemoryRetriever/History stores into bounded public DTOs. */
+export interface InspectorRuntimeService extends ChatRuntimeService {
+  contextInspector(sessionId: string): Promise<ContextInspectorDto | undefined>;
+  searchMemory(query: MemoryInspectorQuery): Promise<MemoryPageDto>;
+  getMemory(memoryId: string): Promise<MemoryDetailDto | undefined>;
+  memorySources(memoryId: string): Promise<MemorySourceDto[] | undefined>;
+  getHistoryMessage(sessionId: string, messageId: string): Promise<HistoryMessageDto | undefined>;
+  retrievalInspector(sessionId: string, messageId: string): Promise<RetrievalInspectorDto | undefined>;
+}
+
 interface DemoSession { summary: SessionSummaryDto; messages: ChatMessageDto[]; }
 interface Generation {
   sessionId: string; id: string; assistantMessageId: string; controller: AbortController;
@@ -37,12 +51,16 @@ interface Generation {
 /** Deterministic offline runtime used by the Console demo and E2E suite. It
  * lives behind the same boundary as a real Harness adapter, so HTTP never
  * owns the agent loop or canonical message state. */
-export class DemoConsoleRuntimeService implements ChatRuntimeService {
+export class DemoConsoleRuntimeService implements InspectorRuntimeService {
   readonly events = new EventBus<HarnessEventMap>();
   readonly health: RuntimeHealthService;
   private readonly startedAt = Date.now();
   private readonly sessions = new Map<string, DemoSession>();
   private readonly generations = new Map<string, Generation>();
+  private readonly contexts = new Map<string, ContextInspectorDto>();
+  private readonly memories = new Map<string, MemorySummaryDto>();
+  private readonly memorySourcesById = new Map<string, MemorySourceDto[]>();
+  private readonly retrievalByMessage = new Map<string, RetrievalInspectorDto>();
 
   constructor(private readonly profile: "development" | "test" = "test") {
     this.health = new RuntimeHealthService([
@@ -53,6 +71,7 @@ export class DemoConsoleRuntimeService implements ChatRuntimeService {
       { name: "sandbox", check: async () => ({ ok: true, detail: "demo sandbox adapter" }) },
     ], "0.1.0");
     this.seed("demo-session-01", "Console smoke session");
+    this.seedInspectorFixtures("demo-session-01");
   }
 
   async meta(): Promise<MetaDto> { return metaDtoSchema.parse({ version: "0.1.0", apiVersion: "v1", schemaVersion: 1, serverTime: new Date().toISOString() }); }
@@ -76,6 +95,52 @@ export class DemoConsoleRuntimeService implements ChatRuntimeService {
     const session = this.sessions.get(sessionId); if (!session) return undefined;
     const offset = decodeCursor(query.cursor); const items = session.messages.slice(offset, offset + Math.min(query.limit, 1_000)); const nextOffset = offset + items.length;
     return chatMessagesDtoSchema.parse({ sessionId, items, ...(nextOffset < session.messages.length ? { nextCursor: encodeCursor(nextOffset) } : {}) });
+  }
+
+  async contextInspector(sessionId: string): Promise<ContextInspectorDto | undefined> {
+    const session = this.sessions.get(sessionId); if (!session) return undefined;
+    this.syncContext(sessionId);
+    return structuredClone(this.contexts.get(sessionId));
+  }
+
+  async searchMemory(input: MemoryInspectorQuery): Promise<MemoryPageDto> {
+    const query = memoryInspectorQuerySchema.parse(input);
+    const needle = query.query.toLocaleLowerCase();
+    const records = [...this.memories.values()].filter((memory) => {
+      if (needle && !`${memory.content} ${memory.entities.join(" ")} ${memory.tags.join(" ")}`.toLocaleLowerCase().includes(needle)) return false;
+      if (query.type && memory.type !== query.type) return false;
+      if (query.status && memory.status !== query.status) return false;
+      if (query.sourceType && memory.sourceType !== query.sourceType) return false;
+      if (query.scopeKind && memory.scope.kind !== query.scopeKind) return false;
+      if (query.scopeId && memory.scope.id !== query.scopeId) return false;
+      if (query.sessionId && !memory.sourceReferences.some((source) => source.sessionId === query.sessionId)) return false;
+      return true;
+    }).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    const offset = decodeCursor(query.cursor); const items = records.slice(offset, offset + query.limit); const nextOffset = offset + items.length;
+    return memoryPageDtoSchema.parse({ items, total: records.length, ...(nextOffset < records.length ? { nextCursor: encodeCursor(nextOffset) } : {}) });
+  }
+
+  async getMemory(memoryId: string): Promise<MemoryDetailDto | undefined> {
+    const memory = this.memories.get(memoryId); if (!memory) return undefined;
+    const related = [...this.memories.values()].filter((candidate) => candidate.id !== memory.id && (candidate.entities.some((entity) => memory.entities.includes(entity)) || candidate.scope.id === memory.scope.id));
+    const timeline = [...this.memories.values()].filter((candidate) => candidate.entities.some((entity) => memory.entities.includes(entity))).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    return memoryDetailDtoSchema.parse({ ...memory, timeline: timeline.slice(0, 100), relatedMemoryIds: related.slice(0, 100).map((candidate) => candidate.id) });
+  }
+
+  async memorySources(memoryId: string): Promise<MemorySourceDto[] | undefined> {
+    if (!this.memories.has(memoryId)) return undefined;
+    return structuredClone(this.memorySourcesById.get(memoryId) ?? []);
+  }
+
+  async getHistoryMessage(sessionId: string, messageId: string): Promise<HistoryMessageDto | undefined> {
+    const session = this.sessions.get(sessionId); if (!session) return undefined;
+    const index = session.messages.findIndex((message) => message.id === messageId); const message = session.messages[index]; if (!message) return undefined;
+    return historyMessageDtoSchema.parse({ id: message.id, sessionId, role: message.role, content: boundedText(message.content, 20_000), createdAt: message.createdAt, ...(session.messages[index - 1] ? { beforeId: session.messages[index - 1].id } : {}), ...(session.messages[index + 1] ? { afterId: session.messages[index + 1].id } : {}) });
+  }
+
+  async retrievalInspector(sessionId: string, messageId: string): Promise<RetrievalInspectorDto | undefined> {
+    const session = this.sessions.get(sessionId); if (!session || !session.messages.some((message) => message.id === messageId)) return undefined;
+    return structuredClone(this.retrievalByMessage.get(`${sessionId}:${messageId}`) ?? { sessionId, messageId, query: "", results: [], total: 0 });
   }
 
   async startGeneration(sessionId: string, content: string, retryOfMessageId?: string): Promise<ChatGenerationDto> {
@@ -118,9 +183,9 @@ export class DemoConsoleRuntimeService implements ChatRuntimeService {
       this.finishCompleted(generation, session);
     } catch { this.finishFailed(generation, session, "generation_failed"); }
   }
-  private finishCompleted(generation: Generation, session: DemoSession): void { const message = this.assistant(generation, session); if (!message) return; message.status = "completed"; message.updatedAt = new Date().toISOString(); this.touch(session); this.emitChat(generation, { type: "completed", messageId: message.id, message }); }
-  private finishCancelled(generation: Generation, session: DemoSession): void { const message = this.assistant(generation, session); if (!message) return; message.status = "cancelled"; message.updatedAt = new Date().toISOString(); this.touch(session); this.emitChat(generation, { type: "cancelled", messageId: message.id, message }); }
-  private finishFailed(generation: Generation, session: DemoSession, errorCode: string): void { const message = this.assistant(generation, session); if (!message) return; message.status = "failed"; message.updatedAt = new Date().toISOString(); this.touch(session); this.emitChat(generation, { type: "failed", messageId: message.id, message, errorCode }); }
+  private finishCompleted(generation: Generation, session: DemoSession): void { const message = this.assistant(generation, session); if (!message) return; message.status = "completed"; message.updatedAt = new Date().toISOString(); this.recordRetrieval(session.summary.id, message.id, session.messages.slice(0, -1).findLast((candidate) => candidate.role === "user")?.content ?? ""); this.touch(session); this.syncContext(session.summary.id); this.emitChat(generation, { type: "completed", messageId: message.id, message }); }
+  private finishCancelled(generation: Generation, session: DemoSession): void { const message = this.assistant(generation, session); if (!message) return; message.status = "cancelled"; message.updatedAt = new Date().toISOString(); this.touch(session); this.syncContext(session.summary.id); this.emitChat(generation, { type: "cancelled", messageId: message.id, message }); }
+  private finishFailed(generation: Generation, session: DemoSession, errorCode: string): void { const message = this.assistant(generation, session); if (!message) return; message.status = "failed"; message.updatedAt = new Date().toISOString(); this.touch(session); this.syncContext(session.summary.id); this.emitChat(generation, { type: "failed", messageId: message.id, message, errorCode }); }
   private assistant(generation: Generation, session: DemoSession): ChatMessageDto | undefined { return session.messages.find((item) => item.id === generation.assistantMessageId); }
   private retrySource(session: DemoSession, id: string | undefined): string { if (!id) return "Continue the previous request."; const index = session.messages.findIndex((item) => item.id === id); return session.messages.slice(0, index).reverse().find((item) => item.role === "user")?.content ?? "Continue the previous request."; }
   private emitChat(generation: Generation, partial: Omit<ChatStreamEventDto, "id" | "sessionId" | "generationId" | "sequence" | "timestamp">): void {
@@ -129,12 +194,52 @@ export class DemoConsoleRuntimeService implements ChatRuntimeService {
     generation.events.push(event); for (const listener of generation.listeners) { try { listener(event); } catch { /* observers cannot break runtime */ } }
     if (["completed", "cancelled", "failed"].includes(event.type)) { generation.done = true; generation.listeners.clear(); }
   }
+  private seedInspectorFixtures(sessionId: string): void {
+    const session = this.sessions.get(sessionId); if (!session) return;
+    const createdAt = session.summary.createdAt;
+    const firstId = session.messages[0]?.id ?? `${sessionId}-m1`;
+    const lastId = session.messages.at(-1)?.id ?? firstId;
+    const range = { firstMessageId: firstId, lastMessageId: lastId, messageCount: Math.max(1, session.messages.length) };
+    const autoPin = { id: "automatic-compaction", source: "automatic" as const, priority: "normal" as const, tokenEstimate: 980, contentPreview: "Canonical source: early runtime decisions remain available through History.", createdAt, sessionId, sourceRange: range };
+    const pins = [
+      { id: "system-runtime", source: "system" as const, priority: "critical" as const, tokenEstimate: 2_180, contentPreview: "History is canonical; Context is a bounded working set.", createdAt },
+      ...(session.messages.length ? [autoPin] : []),
+      { id: "agent-current-goal", source: "visible-agent" as const, priority: "normal" as const, tokenEstimate: 210, contentPreview: "Keep the Console read-only and preserve source provenance.", createdAt, sessionId, expiresAtTurn: 20 },
+    ];
+    const compactions = session.messages.length ? [{ id: "compact-demo-01", sessionId, createdAt, kind: "turn" as const, sourceRange: range, cutoffAfterMessageId: firstId, cutoffBeforeMessageId: lastId, evictedMessageCount: 1, evictedTokens: 7_240, retainedTokens: 1_220, beforeTokens: 8_460, afterTokens: 4_140, automaticPinId: autoPin.id, automaticPinPreview: autoPin.contentPreview }] : [];
+    this.contexts.set(sessionId, contextInspectorDtoSchema.parse({ sessionId, currentTurn: Math.max(1, session.messages.length), historyMessageCount: session.messages.length, stats: { usedTokens: 17_640, contextLimit: 131_072, availableTokens: 113_432, safeHeadroomTokens: 93_432, systemTokens: 3_100, pinnedTokens: 3_370, recentRawTokens: 1_220, artifactHandleTokens: 0, toolSchemaTokens: 3_450, retrievedMemoryTokens: 1_200, toolResultTokens: 300, reservedTokens: 20_000, generationReserveTokens: 20_000, pressure: 0.287, pressureLevel: "NORMAL", recentRawTargetTokens: 48_000 }, policy: { level: "NORMAL", recommendations: ["continue_normal"], enforced: false, effectiveRecentRawTarget: 48_000, effectiveRetrievalTokenBudget: 8_000, effectiveToolSchemaBudget: 8_000, effectiveToolResultBudget: 16_000, generationReserveTokens: 20_000 }, pins, compactions, retrievedMemoryCount: 1, loadedToolCount: 8 }));
+    if (!this.memories.size) {
+      const ts = createdAt;
+      const make = (record: MemorySummaryDto): void => { this.memories.set(record.id, record); this.memorySourcesById.set(record.id, record.sourceReferences.map((source, ordinal) => { const message = this.sessions.get(source.sessionId)?.messages.find((candidate) => candidate.id === source.messageId); return { memoryId: record.id, sessionId: source.sessionId, messageId: source.messageId, role: message?.role ?? (ordinal === 0 ? "user" : "assistant"), content: boundedText(message?.content ?? (ordinal === 0 ? "Inspect the runtime foundation." : "The runtime is ready for observation."), 20_000), createdAt: message?.createdAt ?? ts, ordinal }; })); };
+      make({ id: "memory-typescript", type: "semantic", content: "Mnemos uses TypeScript for the runtime.", sourceIds: [firstId, lastId], sourceReferences: [{ sessionId, messageId: firstId }, { sessionId, messageId: lastId }], createdAt: ts, updatedAt: ts, lastConfirmedAt: ts, importance: 0.86, confidence: 0.94, sourceType: "explicit_user_statement", status: "active", derivedFromMemoryIds: [], confirmationCount: 3, reinforcementScore: 0.8, stale: false, durability: "durable", scope: { kind: "project", id: "mnemos" }, entities: ["Mnemos", "TypeScript"], tags: ["architecture", "language"] });
+      make({ id: "memory-postgres", type: "decision", content: "The project uses PostgreSQL as its primary database.", sourceIds: [lastId], sourceReferences: [{ sessionId, messageId: lastId }], createdAt: ts, updatedAt: ts, lastConfirmedAt: ts, importance: 0.9, confidence: 0.91, sourceType: "explicit_user_statement", status: "active", derivedFromMemoryIds: [], confirmationCount: 2, reinforcementScore: 0.55, stale: false, durability: "durable", scope: { kind: "project", id: "mnemos" }, entities: ["Mnemos", "PostgreSQL"], tags: ["decision", "database"] });
+      make({ id: "memory-sqlite", type: "decision", content: "The early prototype used SQLite during local development.", sourceIds: [firstId], sourceReferences: [{ sessionId, messageId: firstId }], createdAt: ts, updatedAt: ts, importance: 0.45, confidence: 0.76, sourceType: "tool_observation", status: "superseded", supersededBy: "memory-postgres", derivedFromMemoryIds: [], confirmationCount: 1, reinforcementScore: 0.1, stale: false, durability: "normal", scope: { kind: "project", id: "mnemos" }, entities: ["Mnemos", "SQLite"], tags: ["history", "database"] });
+      make({ id: "memory-compaction", type: "episodic", content: "Context compaction preserves canonical History and updates an automatic pin.", sourceIds: [firstId, lastId], sourceReferences: [{ sessionId, messageId: firstId }, { sessionId, messageId: lastId }], createdAt: ts, updatedAt: ts, importance: 0.63, confidence: 0.88, sourceType: "derived_summary", status: "active", derivedFromMemoryIds: ["memory-typescript"], confirmationCount: 2, reinforcementScore: 0.4, stale: false, durability: "normal", scope: { kind: "session", id: sessionId }, entities: ["Context", "History"], tags: ["compaction", "runtime"] });
+    }
+  }
+  private syncContext(sessionId: string): void {
+    const current = this.contexts.get(sessionId); const session = this.sessions.get(sessionId); if (!current || !session) return;
+    const recentRawTokens = Math.ceil(session.messages.reduce((sum, message) => sum + message.content.length, 0) / 4);
+    const retrievedMemoryTokens = [...this.retrievalByMessage.values()].filter((entry) => entry.sessionId === sessionId).at(-1)?.results.length ? 1_200 : 0;
+    const toolResultTokens = session.messages.some((message) => message.content.includes("[tool]") || message.content.includes("[ptc]")) ? 720 : 300;
+    const usedTokens = current.stats.systemTokens + current.stats.pinnedTokens + recentRawTokens + current.stats.artifactHandleTokens + current.stats.toolSchemaTokens + retrievedMemoryTokens + toolResultTokens;
+    const pressure = Math.min(1, (usedTokens + current.stats.generationReserveTokens) / current.stats.contextLimit);
+    const level = pressure >= 0.92 ? "EMERGENCY" : pressure >= 0.85 ? "COMPACTION" : pressure >= 0.75 ? "HIGH" : pressure >= 0.6 ? "ELEVATED" : "NORMAL";
+    const scale = level === "NORMAL" ? 1 : level === "ELEVATED" ? 0.9 : level === "HIGH" ? 0.7 : level === "COMPACTION" ? 0.5 : 0.35;
+    const recommendations = level === "NORMAL" ? ["continue_normal"] : level === "ELEVATED" ? ["avoid_large_retrieval"] : level === "HIGH" ? ["prefer_ptc", "prefer_artifact", "limit_memory_retrieval", "unload_unused_dynamic_tools"] : ["prefer_ptc", "prefer_artifact", "limit_memory_retrieval", "request_compaction"];
+    this.contexts.set(sessionId, contextInspectorDtoSchema.parse({ ...current, currentTurn: Math.max(1, session.messages.length), historyMessageCount: session.messages.length, stats: { ...current.stats, usedTokens, availableTokens: Math.max(0, current.stats.contextLimit - usedTokens), safeHeadroomTokens: Math.max(0, current.stats.contextLimit - usedTokens - current.stats.generationReserveTokens), recentRawTokens, retrievedMemoryTokens, toolResultTokens, pressure, pressureLevel: level }, policy: { ...current.policy, level, recommendations, enforced: level === "EMERGENCY", effectiveRecentRawTarget: Math.max(1, Math.floor(48_000 * scale)), effectiveRetrievalTokenBudget: Math.max(1, Math.floor(8_000 * scale)), effectiveToolSchemaBudget: Math.max(1, Math.floor(8_000 * scale)), effectiveToolResultBudget: Math.max(1, Math.floor(16_000 * scale)) }, retrievedMemoryCount: retrievedMemoryTokens ? 1 : 0 }));
+  }
+  private recordRetrieval(sessionId: string, messageId: string, query: string): void {
+    const memory = query.toLocaleLowerCase().includes("postgres") ? this.memories.get("memory-postgres") : this.memories.get("memory-typescript");
+    if (!memory) return;
+    this.retrievalByMessage.set(`${sessionId}:${messageId}`, retrievalInspectorDtoSchema.parse({ sessionId, messageId, query, results: [{ memory, score: 0.87, rank: 1, matchedBy: ["lexical", "semantic"], signals: { lexical: 0.42, semantic: 0.31, confidence: 0.08, reinforcement: 0.06 } }], total: 1 }));
+  }
   private seed(id: string, displayName: string, empty = false): SessionSummaryDto {
     const createdAt = new Date().toISOString(); const messages: ChatMessageDto[] = empty ? [] : [
       { id: `${id}-m1`, sessionId: id, role: "user", content: "Inspect the runtime foundation.", status: "completed", createdAt, updatedAt: createdAt },
       { id: `${id}-m2`, sessionId: id, role: "assistant", content: "The runtime is ready for observation.", status: "completed", createdAt, updatedAt: createdAt },
     ];
-    const summary = sessionSummaryDtoSchema.parse({ id, createdAt, updatedAt: createdAt, status: "active", messageCount: messages.length, agentCount: 1, displayName }); this.sessions.set(id, { summary, messages }); return summary;
+    const summary = sessionSummaryDtoSchema.parse({ id, createdAt, updatedAt: createdAt, status: "active", messageCount: messages.length, agentCount: 1, displayName }); this.sessions.set(id, { summary, messages }); this.seedInspectorFixtures(id); return summary;
   }
   private touch(session: DemoSession): void { session.summary = sessionSummaryDtoSchema.parse({ ...session.summary, updatedAt: new Date().toISOString(), messageCount: session.messages.length }); }
 }
@@ -143,5 +248,6 @@ function chunkText(value: string, size: number): string[] { const chunks: string
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function encodeCursor(offset: number): string { return Buffer.from(String(offset), "utf8").toString("base64url"); }
 function decodeCursor(cursor: string | undefined): number { if (cursor === undefined) return 0; const value = Number(Buffer.from(cursor, "base64url").toString("utf8")); return Number.isInteger(value) && value >= 0 ? value : -1; }
+function boundedText(value: string, max: number): string { return value.length <= max ? value : `${value.slice(0, max - 1)}…`; }
 function notFound(message: string): Error & { statusCode: number; code: string } { const error = new Error(message) as Error & { statusCode: number; code: string }; error.statusCode = 404; error.code = "not_found"; return error; }
 function badRequest(code: string, message: string): Error & { statusCode: number; code: string } { const error = new Error(message) as Error & { statusCode: number; code: string }; error.statusCode = 400; error.code = code; return error; }

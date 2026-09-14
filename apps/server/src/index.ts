@@ -24,9 +24,16 @@ import {
   sessionSummaryDtoSchema,
   type RuntimeEventDto,
   type RuntimeEventType,
+  contextInspectorDtoSchema,
+  memoryInspectorQuerySchema,
+  memoryPageDtoSchema,
+  memoryDetailDtoSchema,
+  memorySourceDtoSchema,
+  historyMessageDtoSchema,
+  retrievalInspectorDtoSchema,
 } from "@mnemos/contracts";
 import type { HarnessEventMap } from "@mnemos/core";
-import { DemoConsoleRuntimeService, type ChatRuntimeService, type ConsoleRuntimeService } from "./runtime.js";
+import { DemoConsoleRuntimeService, type ChatRuntimeService, type ConsoleRuntimeService, type InspectorRuntimeService } from "./runtime.js";
 
 export interface WebAccessPolicy {
   profile?: "development" | "test" | "production";
@@ -111,6 +118,13 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     if (messages === undefined) throw httpError(404, "not_found", "Session not found.");
     return sendDto(reply, chatMessagesDtoSchema, messages);
   });
+  app.get<{ Params: { sessionId: string } }>(`/api/${apiVersion}/sessions/:sessionId/context`, async (request, reply) => {
+    const inspector = requireInspectorRuntime(runtime);
+    const sessionId = routeId(request.params.sessionId, "session");
+    const context = await inspector.contextInspector(sessionId);
+    if (context === undefined) throw httpError(404, "not_found", "Session not found.");
+    return sendDto(reply, contextInspectorDtoSchema, context);
+  });
   app.post<{ Params: { sessionId: string } }>(`/api/${apiVersion}/sessions/:sessionId/messages`, async (request, reply) => {
     const chat = requireChatRuntime(runtime);
     const { sessionId } = sessionParamsSchema.parse(request.params);
@@ -136,6 +150,31 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     const sessionId = routeId(request.params.sessionId, "session");
     const generationId = routeId(request.params.generationId, "generation");
     return openChatStream(chat, sessionId, generationId, request, reply);
+  });
+  app.get(`/api/${apiVersion}/memory`, async (request, reply) => {
+    const inspector = requireInspectorRuntime(runtime);
+    const query = memoryInspectorQuerySchema.parse(request.query);
+    return sendDto(reply, memoryPageDtoSchema, await inspector.searchMemory(query));
+  });
+  app.get<{ Params: { memoryId: string } }>(`/api/${apiVersion}/memory/:memoryId`, async (request, reply) => {
+    const inspector = requireInspectorRuntime(runtime); const memory = await inspector.getMemory(routeId(request.params.memoryId, "memory"));
+    if (memory === undefined) throw httpError(404, "not_found", "Memory not found.");
+    return sendDto(reply, memoryDetailDtoSchema, memory);
+  });
+  app.get<{ Params: { memoryId: string } }>(`/api/${apiVersion}/memory/:memoryId/sources`, async (request, reply) => {
+    const inspector = requireInspectorRuntime(runtime); const sources = await inspector.memorySources(routeId(request.params.memoryId, "memory"));
+    if (sources === undefined) throw httpError(404, "not_found", "Memory not found.");
+    return sendDto(reply, { parse(value: unknown) { return memorySourceDtoSchema.array().parse(value); } }, sources);
+  });
+  app.get<{ Params: { sessionId: string; messageId: string } }>(`/api/${apiVersion}/sessions/:sessionId/history/:messageId`, async (request, reply) => {
+    const inspector = requireInspectorRuntime(runtime); const source = await inspector.getHistoryMessage(routeId(request.params.sessionId, "session"), routeId(request.params.messageId, "message"));
+    if (source === undefined) throw httpError(404, "not_found", "History message not found.");
+    return sendDto(reply, historyMessageDtoSchema, source);
+  });
+  app.get<{ Params: { sessionId: string; messageId: string } }>(`/api/${apiVersion}/sessions/:sessionId/messages/:messageId/retrieval`, async (request, reply) => {
+    const inspector = requireInspectorRuntime(runtime); const retrieval = await inspector.retrievalInspector(routeId(request.params.sessionId, "session"), routeId(request.params.messageId, "message"));
+    if (retrieval === undefined) throw httpError(404, "not_found", "Message not found.");
+    return sendDto(reply, retrievalInspectorDtoSchema, retrieval);
   });
   app.post(`/api/${apiVersion}/dev/demo-session`, async (_request, reply) => {
     if (!allowDemoSession || runtime.createDemoSession === undefined) throw httpError(404, "not_found", "Demo session is disabled.");
@@ -257,6 +296,14 @@ function decodeCursor(cursor: string): number {
 function routeId(value: unknown, label: string): string {
   if (typeof value !== "string" || value.length < 1 || value.length > 256) throw httpError(400, "invalid_request", `Invalid ${label} id.`);
   return value;
+}
+
+function requireInspectorRuntime(runtime: ConsoleRuntimeService): InspectorRuntimeService {
+  const candidate = runtime as Partial<InspectorRuntimeService>;
+  if (typeof candidate.contextInspector !== "function" || typeof candidate.searchMemory !== "function" || typeof candidate.getMemory !== "function" || typeof candidate.memorySources !== "function" || typeof candidate.getHistoryMessage !== "function" || typeof candidate.retrievalInspector !== "function") {
+    throw httpError(503, "inspector_unavailable", "Context and memory inspection is unavailable.");
+  }
+  return runtime as InspectorRuntimeService;
 }
 
 function requireChatRuntime(runtime: ConsoleRuntimeService): ChatRuntimeService {

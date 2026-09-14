@@ -10,12 +10,15 @@ const summary = { status: "ready", version: "0.1.0", uptimeSeconds: 42, sessions
 const session = { id: "demo-session-01", createdAt: now, updatedAt: now, status: "active", messageCount: 2, agentCount: 1, displayName: "Console smoke session" };
 
 function mockResponse(body: unknown, status = 200): Response { return { ok: status >= 200 && status < 300, status, headers: new Headers({ "content-type": "application/json" }), json: async () => body } as Response; }
-async function renderRoute(path: "/" | "/sessions"): Promise<void> { render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><RouterProvider router={router} /></QueryClientProvider>); await router.navigate({ to: path }); }
+async function renderRoute(path: "/" | "/sessions" | "/memory"): Promise<void> { render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><RouterProvider router={router} /></QueryClientProvider>); await router.navigate({ to: path }); }
 
 beforeEach(() => {
   useUiStore.setState({ eventFilter: "all", eventsPaused: false, theme: "system", sidebarCollapsed: false, mobileNavOpen: false });
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.includes("/memory?") || url.endsWith("/memory")) return mockResponse({ items: [{ id: "memory-typescript", type: "semantic", content: "Mnemos uses TypeScript for the runtime.", sourceIds: ["demo-session-01-m1"], sourceReferences: [{ sessionId: "demo-session-01", messageId: "demo-session-01-m1" }], createdAt: now, updatedAt: now, lastConfirmedAt: now, importance: 0.8, confidence: 0.94, sourceType: "explicit_user_statement", status: "active", derivedFromMemoryIds: [], confirmationCount: 2, reinforcementScore: 0.7, stale: false, durability: "durable", scope: { kind: "project", id: "mnemos" }, entities: ["Mnemos", "TypeScript"], tags: ["architecture"] }], total: 1 });
+    if (url.includes("/memory/memory-typescript/sources")) return mockResponse([{ memoryId: "memory-typescript", sessionId: "demo-session-01", messageId: "demo-session-01-m1", role: "user", content: "Inspect the runtime foundation.", createdAt: now, ordinal: 0 }]);
+    if (url.includes("/memory/memory-typescript")) return mockResponse({ id: "memory-typescript", type: "semantic", content: "Mnemos uses TypeScript for the runtime.", sourceIds: ["demo-session-01-m1"], sourceReferences: [{ sessionId: "demo-session-01", messageId: "demo-session-01-m1" }], createdAt: now, updatedAt: now, lastConfirmedAt: now, importance: 0.8, confidence: 0.94, sourceType: "explicit_user_statement", status: "active", derivedFromMemoryIds: [], confirmationCount: 2, reinforcementScore: 0.7, stale: false, durability: "durable", scope: { kind: "project", id: "mnemos" }, entities: ["Mnemos", "TypeScript"], tags: ["architecture"], timeline: [], relatedMemoryIds: [] });
     if (url.includes("runtime/summary")) return mockResponse(summary);
     if (url.includes("/ready")) return mockResponse({ status: "ok", checks: [], generatedAt: now });
     if (url.includes("/sessions/") && !url.includes("?")) return mockResponse({ ...session, recentMessages: [], activeAgentIds: [] });
@@ -37,6 +40,13 @@ describe("Console foundation", () => {
     await renderRoute("/sessions");
     expect(await screen.findByText("Console smoke session")).toBeInTheDocument();
     expect(screen.getAllByText("demo-session-01").length).toBeGreaterThan(0);
+  });
+
+  it("renders the F3 memory explorer from bounded server data", async () => {
+    await renderRoute("/memory");
+    expect(await screen.findByText("Trace long-term memory back to History.")).toBeInTheDocument();
+    expect(await screen.findByText("Mnemos uses TypeScript for the runtime.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Memory type")).toBeInTheDocument();
   });
 
   it("shows an API error state instead of silently failing", async () => {

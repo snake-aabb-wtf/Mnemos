@@ -39,3 +39,25 @@ test("stops an active generation and records cancelled status", async ({ page })
   await page.goto("about:blank", { waitUntil: "commit", timeout: 5_000 });
   await page.close();
 });
+
+test("inspects context compaction and traces memory back to canonical History", async ({ page }) => {
+  await page.goto("/sessions/demo-session-01", { waitUntil: "commit", timeout: 10_000 });
+  await expect(page.getByText("Context working set")).toBeVisible();
+  await expect(page.getByText("Token composition")).toBeVisible();
+  await expect(page.getByText("Compaction timeline")).toBeVisible();
+  await expect(page.getByText("NORMAL", { exact: true }).last()).toBeVisible();
+  await page.getByRole("link", { name: /View canonical History/ }).first().click();
+  await expect(page.getByRole("heading", { name: "Original message" })).toBeVisible();
+  await expect(page.getByText("Inspect the runtime foundation.", { exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Memory", exact: true }).first().click();
+  await expect(page.getByRole("heading", { name: "Trace long-term memory back to History." })).toBeVisible();
+  await expect(page.getByText("Mnemos uses TypeScript for the runtime.", { exact: true })).toBeVisible();
+  await page.getByText("Mnemos uses TypeScript for the runtime.", { exact: true }).click();
+  await expect(page.getByText("Provenance")).toBeVisible();
+  await expect(page.getByRole("link", { name: /user · source 1/ })).toBeVisible();
+  await page.getByRole("link", { name: /user · source 1/ }).click();
+  await expect(page.getByRole("heading", { name: "Original message" })).toBeVisible();
+  await expect(page.getByText("Inspect the runtime foundation.", { exact: true })).toBeVisible();
+  await page.goto("about:blank", { waitUntil: "commit", timeout: 5_000 });
+  await page.close();
+});

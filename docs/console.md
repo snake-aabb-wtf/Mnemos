@@ -1,4 +1,4 @@
-# Mnemos Web Console (Frontend F2)
+# Mnemos Web Console (Frontend F3)
 
 The console is an adapter and diagnostic surface, not a replacement for the Mnemos runtime. Canonical History,
 Memory, Artifacts, tasks, permissions, and runtime policy stay behind the server's injected runtime service.
@@ -32,7 +32,7 @@ The default test/demo server is deterministic and in-memory. `POST /api/v1/dev/d
 development/test profiles and is disabled in production. It exists only to exercise the UI and SSE chain without an
 LLM API key.
 
-## F1 API and F2 Chat API
+## F1 API, F2 Chat API, and F3 Inspector API
 
 `GET /api/v1/meta`, `/health`, `/ready`, `/runtime/summary`, `/sessions`, `/sessions/:sessionId`, and `/events` remain
 the F1 observer surface. F2 adds `POST /api/v1/sessions`, `GET /api/v1/sessions/:sessionId/messages`,
@@ -48,11 +48,21 @@ replay a bounded generation event buffer, preventing a POST/subscribe race. Chat
 message DTOs, and safe activity labels; no hidden reasoning, secrets, or raw tool output. Heartbeats keep idle proxies
 open and disconnects unsubscribe from both channels.
 
+F3 adds read-only, runtime-owned inspection endpoints: `GET /api/v1/sessions/:sessionId/context`,
+`GET /api/v1/memory`, `GET /api/v1/memory/:memoryId`, `GET /api/v1/memory/:memoryId/sources`,
+`GET /api/v1/sessions/:sessionId/history/:messageId`, and
+`GET /api/v1/sessions/:sessionId/messages/:messageId/retrieval`. DTOs are bounded and validated by the shared
+contracts package. Context values are policy telemetry (not editable browser state); compaction records link to the
+canonical History boundary. Memory records remain derived and source-traceable, and large payloads are not copied into
+the inspector.
+
 ## Console pages
 
-F2 includes the F1 Overview, Sessions, Runtime Events, and Settings plus a three-column Chat Workbench. The workbench
+F3 includes the F1 Overview, Sessions, Runtime Events, and Settings plus the F2 three-column Chat Workbench. The workbench
 has a session rail with New Session, canonical conversation history, streaming assistant output, safe runtime activity,
-Stop, retry/regenerate, Markdown/code rendering, and a compact agent/context/tool/PTC inspector. Future areas
+Stop, retry/regenerate, Markdown/code rendering, and a full read-only Context Inspector with token composition,
+pressure policy, pins, compaction timeline, and retrieval explanations. The `/memory` Explorer supports bounded search,
+type/status filters, detail, timeline, confidence/reinforcement/stale fields, and Memory → History provenance links. Future areas
 are visibly marked as coming later rather than pretending to be implemented. The shell is keyboard accessible,
 responsive from mobile through desktop, and supports system/light/dark theme preference. IDs use monospace display and
 copy controls; server timestamps are formatted in the browser's local timezone.
@@ -67,7 +77,8 @@ pnpm test:e2e
 
 Playwright uses Chromium and starts the built Fastify server plus Vite. The smoke path proves Browser → REST → runtime
 fixture → EventBus → SSE → React, entirely offline. F2 E2E covers session creation, streaming, refresh recovery, and
-true cancellation. CI installs Chromium explicitly. Canonical messages are always read back from the runtime API.
+true cancellation; F3 E2E covers Context/Compaction inspection and Memory provenance navigation. CI installs Chromium
+explicitly. Canonical messages are always read back from the runtime API.
 
 ## Security and roadmap
 
@@ -79,7 +90,7 @@ runtime lifecycle owner. F1–F6 are intentionally staged:
 | --- | --- | --- |
 | F1 | Complete | Console foundation, REST/SSE, runtime overview, sessions, events, tests |
 | F2 | Complete | Chat workbench, streaming, cancellation, retry, Markdown, activity summary, E2E |
-| F3 | Pending | Context and memory inspectors |
+| F3 | Complete | Context telemetry, compaction timeline, Memory Explorer, retrieval and History provenance |
 | F4 | Pending | Artifacts, tools, and PTC inspector |
 | F5 | Pending | Multi-agent task graph |
 | F6 | Pending | Runtime dashboard, UX polish, expanded E2E |

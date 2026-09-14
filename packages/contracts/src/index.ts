@@ -179,6 +179,103 @@ export type ChatStreamEventDto = z.infer<typeof chatStreamEventDtoSchema>;
 export const chatCancelResponseSchema = z.object({ status: z.literal("cancelling"), generationId: z.string().min(1) }).strict();
 export type ChatCancelResponse = z.infer<typeof chatCancelResponseSchema>;
 
+// F3 read-only inspector contracts. These are intentionally bounded public DTOs;
+// they do not expose ContextManager internals, raw tool payloads, or private memory
+// implementation details.
+export const contextPressureLevelDtoSchema = z.enum(["NORMAL", "ELEVATED", "HIGH", "COMPACTION", "EMERGENCY"]);
+export const contextPolicyActionDtoSchema = z.enum([
+  "continue_normal", "avoid_large_retrieval", "prefer_ptc", "prefer_artifact",
+  "limit_memory_retrieval", "reduce_tool_result_budget", "unload_unused_dynamic_tools",
+  "avoid_loading_more_tools", "request_compaction", "force_compaction",
+  "do_not_invoke_model_until_context_reduced",
+]);
+export const contextStatsDtoSchema = z.object({
+  usedTokens: z.number().int().nonnegative(), contextLimit: z.number().int().positive(),
+  availableTokens: z.number().int().nonnegative(), safeHeadroomTokens: z.number().int().nonnegative(),
+  systemTokens: z.number().int().nonnegative(), pinnedTokens: z.number().int().nonnegative(),
+  recentRawTokens: z.number().int().nonnegative(), artifactHandleTokens: z.number().int().nonnegative(),
+  toolSchemaTokens: z.number().int().nonnegative(), retrievedMemoryTokens: z.number().int().nonnegative(),
+  toolResultTokens: z.number().int().nonnegative(), reservedTokens: z.number().int().nonnegative(),
+  generationReserveTokens: z.number().int().nonnegative(), pressure: z.number().min(0).max(1),
+  pressureLevel: contextPressureLevelDtoSchema, recentRawTargetTokens: z.number().int().positive(),
+}).strict();
+export type ContextStatsDto = z.infer<typeof contextStatsDtoSchema>;
+
+export const contextPinDtoSchema = z.object({
+  id: z.string().min(1), source: z.enum(["system", "automatic", "visible-agent"]),
+  priority: z.enum(["critical", "normal", "low"]), tokenEstimate: z.number().int().nonnegative(),
+  contentPreview: z.string().max(512), createdAt: z.string().datetime(), expiresAtTurn: z.number().int().positive().optional(),
+  sessionId: z.string().min(1).optional(), sourceRange: z.object({
+    firstMessageId: z.string().min(1), lastMessageId: z.string().min(1), messageCount: z.number().int().positive(),
+  }).strict().optional(),
+}).strict();
+export type ContextPinDto = z.infer<typeof contextPinDtoSchema>;
+
+export const contextPolicyDecisionDtoSchema = z.object({
+  level: contextPressureLevelDtoSchema, recommendations: z.array(contextPolicyActionDtoSchema), enforced: z.boolean(),
+  effectiveRecentRawTarget: z.number().int().positive(), effectiveRetrievalTokenBudget: z.number().int().positive(),
+  effectiveToolSchemaBudget: z.number().int().positive(), effectiveToolResultBudget: z.number().int().positive(),
+  generationReserveTokens: z.number().int().nonnegative(),
+}).strict();
+export type ContextPolicyDecisionDto = z.infer<typeof contextPolicyDecisionDtoSchema>;
+
+export const compactionRecordDtoSchema = z.object({
+  id: z.string().min(1), sessionId: z.string().min(1), createdAt: z.string().datetime(),
+  kind: z.enum(["task", "turn", "tool-transaction", "message"]),
+  sourceRange: z.object({ firstMessageId: z.string().min(1), lastMessageId: z.string().min(1), messageCount: z.number().int().positive() }).strict(),
+  cutoffAfterMessageId: z.string().min(1), cutoffBeforeMessageId: z.string().min(1),
+  evictedMessageCount: z.number().int().positive(), evictedTokens: z.number().int().nonnegative(),
+  retainedTokens: z.number().int().nonnegative(), beforeTokens: z.number().int().nonnegative(), afterTokens: z.number().int().nonnegative(),
+  automaticPinId: z.string().min(1), automaticPinPreview: z.string().max(512),
+}).strict();
+export type CompactionRecordDto = z.infer<typeof compactionRecordDtoSchema>;
+
+export const contextInspectorDtoSchema = z.object({
+  sessionId: z.string().min(1), currentTurn: z.number().int().nonnegative(), historyMessageCount: z.number().int().nonnegative(),
+  stats: contextStatsDtoSchema, policy: contextPolicyDecisionDtoSchema,
+  pins: z.array(contextPinDtoSchema).max(100), compactions: z.array(compactionRecordDtoSchema).max(100),
+  retrievedMemoryCount: z.number().int().nonnegative(), loadedToolCount: z.number().int().nonnegative(),
+}).strict();
+export type ContextInspectorDto = z.infer<typeof contextInspectorDtoSchema>;
+
+export const memoryTypeDtoSchema = z.enum(["semantic", "episodic", "decision", "preference", "entity"]);
+export const memorySourceTypeDtoSchema = z.enum(["explicit_user_statement", "tool_observation", "assistant_inference", "derived_summary"]);
+export const memoryStatusDtoSchema = z.enum(["active", "provisional", "superseded", "archived"]);
+export const memorySummaryDtoSchema = z.object({
+  id: z.string().min(1), type: memoryTypeDtoSchema, content: z.string().max(20_000),
+  sourceIds: z.array(z.string().min(1)).max(500), sourceReferences: z.array(z.object({ sessionId: z.string().min(1), messageId: z.string().min(1) }).strict()).max(500),
+  createdAt: z.string().datetime(), updatedAt: z.string().datetime(), lastConfirmedAt: z.string().datetime().optional(),
+  importance: z.number().min(0).max(1), confidence: z.number().min(0).max(1), sourceType: memorySourceTypeDtoSchema,
+  status: memoryStatusDtoSchema, supersededBy: z.string().min(1).optional(), mergedInto: z.string().min(1).optional(),
+  derivedFromMemoryIds: z.array(z.string().min(1)).max(500), confirmationCount: z.number().int().nonnegative(),
+  reinforcementScore: z.number().min(0).max(1), stale: z.boolean(), staleSince: z.string().datetime().optional(),
+  durability: z.enum(["durable", "normal", "ephemeral"]), scope: z.object({ kind: z.enum(["global", "user", "project", "session", "entity"]), id: z.string().min(1) }).strict(),
+  entities: z.array(z.string().min(1)).max(100), tags: z.array(z.string().min(1)).max(100),
+}).strict();
+export type MemorySummaryDto = z.infer<typeof memorySummaryDtoSchema>;
+export const memoryPageDtoSchema = z.object({ items: z.array(memorySummaryDtoSchema).max(100), nextCursor: z.string().min(1).optional(), total: z.number().int().nonnegative() }).strict();
+export type MemoryPageDto = z.infer<typeof memoryPageDtoSchema>;
+export const memoryInspectorQuerySchema = z.object({
+  query: z.string().trim().max(240).default(""), type: memoryTypeDtoSchema.optional(), status: memoryStatusDtoSchema.optional(),
+  sourceType: memorySourceTypeDtoSchema.optional(), scopeKind: z.enum(["global", "user", "project", "session", "entity"]).optional(),
+  scopeId: z.string().trim().max(240).optional(), sessionId: z.string().trim().max(240).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20), cursor: z.string().min(1).max(256).optional(),
+}).strict();
+export type MemoryInspectorQuery = z.infer<typeof memoryInspectorQuerySchema>;
+export const memoryDetailDtoSchema = memorySummaryDtoSchema.extend({
+  timeline: z.array(memorySummaryDtoSchema).max(100),
+  relatedMemoryIds: z.array(z.string().min(1)).max(100),
+}).strict();
+export type MemoryDetailDto = z.infer<typeof memoryDetailDtoSchema>;
+export const memorySourceDtoSchema = z.object({ memoryId: z.string().min(1), sessionId: z.string().min(1), messageId: z.string().min(1), role: z.enum(["system", "user", "assistant", "tool"]), content: z.string().max(20_000), createdAt: z.string().datetime(), ordinal: z.number().int().nonnegative() }).strict();
+export type MemorySourceDto = z.infer<typeof memorySourceDtoSchema>;
+export const historyMessageDtoSchema = z.object({ id: z.string().min(1), sessionId: z.string().min(1), role: z.enum(["system", "user", "assistant", "tool"]), content: z.string().max(20_000), createdAt: z.string().datetime(), beforeId: z.string().min(1).optional(), afterId: z.string().min(1).optional() }).strict();
+export type HistoryMessageDto = z.infer<typeof historyMessageDtoSchema>;
+export const retrievalResultDtoSchema = z.object({ memory: memorySummaryDtoSchema, score: z.number(), rank: z.number().int().positive(), matchedBy: z.array(z.enum(["lexical", "semantic", "entity", "metadata", "temporal"])), signals: z.record(z.string(), z.number()) }).strict();
+export type RetrievalResultDto = z.infer<typeof retrievalResultDtoSchema>;
+export const retrievalInspectorDtoSchema = z.object({ sessionId: z.string().min(1), messageId: z.string().min(1), query: z.string().max(4_000), results: z.array(retrievalResultDtoSchema).max(20), total: z.number().int().nonnegative() }).strict();
+export type RetrievalInspectorDto = z.infer<typeof retrievalInspectorDtoSchema>;
+
 export const runtimeEventTypeSchema = z.enum([
   "runtime.started", "runtime.ready", "runtime.shutting_down", "runtime.stopped",
   "message.received", "message.generated",

@@ -86,6 +86,7 @@ describe("Console API server", () => {
     expect(text).toContain("event: chat.started"); expect(text).toContain("event: chat.activity"); expect(text).toContain("event: chat.text_delta"); expect(text).toContain("event: chat.completed");
     const messages = (await app.inject(`/api/v1/sessions/${sessionId}/messages`)).json().items;
     expect(messages).toHaveLength(2); expect(messages[0]).toMatchObject({ role: "user", content: "Explain the runtime." }); expect(messages[1]).toMatchObject({ role: "assistant", status: "completed" });
+    const retrieval = await app.inject(`/api/v1/sessions/${sessionId}/messages/${messages[1].id}/retrieval`); expect(retrieval.statusCode).toBe(200); expect(retrieval.json().results[0]).toMatchObject({ rank: 1, matchedBy: ["lexical", "semantic"] });
     await app.close();
   });
 
@@ -108,6 +109,18 @@ describe("Console API server", () => {
     await new Promise((resolve) => setTimeout(resolve, 80));
     const messages = (await app.inject(`/api/v1/sessions/${sessionId}/messages`)).json().items;
     expect(messages).toHaveLength(2); expect(messages[0]).toMatchObject({ role: "user", content: "Exercise a failure [fail]" }); expect(messages[1]).toMatchObject({ role: "assistant", status: "failed" });
+    await app.close();
+  });
+
+  it("serves bounded context telemetry, memory search, and canonical provenance", async () => {
+    const runtime = new DemoConsoleRuntimeService("test"); const app = await createServer({ runtime });
+    const context = await app.inject("/api/v1/sessions/demo-session-01/context");
+    expect(context.statusCode).toBe(200); expect(context.json()).toMatchObject({ sessionId: "demo-session-01", stats: { contextLimit: 131072, pressureLevel: "NORMAL" } });
+    const search = await app.inject("/api/v1/memory?query=TypeScript&limit=10");
+    expect(search.statusCode).toBe(200); expect(search.json().items[0]).toMatchObject({ id: "memory-typescript", status: "active" });
+    const detail = await app.inject("/api/v1/memory/memory-typescript"); expect(detail.statusCode).toBe(200); expect(detail.json().sourceReferences).toHaveLength(2);
+    const sources = await app.inject("/api/v1/memory/memory-typescript/sources"); expect(sources.statusCode).toBe(200); expect(sources.json()[0]).toMatchObject({ messageId: "demo-session-01-m1" });
+    const history = await app.inject("/api/v1/sessions/demo-session-01/history/demo-session-01-m1"); expect(history.statusCode).toBe(200); expect(history.json()).toMatchObject({ role: "user", id: "demo-session-01-m1" });
     await app.close();
   });
 });
