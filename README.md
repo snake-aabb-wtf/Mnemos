@@ -1,256 +1,129 @@
 # Mnemos
 
-Mnemos is a TypeScript cognitive-harness runtime. Its architectural direction and staged roadmap are defined in [DESIGN.md](DESIGN.md).
+> A durable cognitive runtime for agents that need memory, context, tools, and operational boundaries.
 
-## Current status
+[![CI](https://github.com/snake-aabb-wtf/Mnemos/actions/workflows/ci.yml/badge.svg)](https://github.com/snake-aabb-wtf/Mnemos/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Phase 14 — Multi-Agent Extensions is implemented.** The project currently provides:
-
-- `@mnemos/core`: `Harness`, separate Visible and Hidden Agent abstractions over replaceable `ModelProvider` / `EmbeddingProvider` interfaces, Context Intelligence, Memory Intelligence, memory consolidation, hybrid retrieval / evaluation contracts, Artifact / spill contracts, and a provider-neutral Tool Runtime.
-- `@mnemos/storage`: SQLite-backed append-only `HistoryStore`, separate mutable `StateStore`, durable compaction checkpoints, SQLite/FTS5 Memory with migrations, a durable consolidation-job queue, rebuildable vector and entity-graph projections, memory-intelligence audit records, and filesystem-backed Artifacts.
-- `@mnemos/cli`: an interactive, persistent chat shell using the mock provider.
-
-Phase 13 adds production runtime boundaries without introducing new cognitive capabilities: validated configuration,
-secret redaction, durable SQLite job leases/workers, persistent compact tool audit, provider reliability policies,
-metrics/tracing/usage abstractions, health/readiness checks, migration tooling, and safe operational diagnostics.
-
-Phase 14 adds a bounded multi-agent runtime over those shared foundations. `AgentDefinition`/`AgentRegistry` keep
-role configuration separate from runtime instances; `TaskManager` and `SqliteAgentTaskStore` persist dependency-aware
-tasks; `MultiAgentOrchestrator` enforces delegation depth, child limits, permissions, budgets, cancellation,
-parallelism, review/replan bounds, and provider isolation. Planner, Researcher, Coder, Reviewer, Visible General, and
-Hidden Memory are presets, not separate runtimes. Each instance receives an independent `ContextManager`, local state,
-tool/PTC policy, and provider binding while History, Memory, Artifact, ToolDispatcher, PTC, Durable Jobs, and
-observability remain shared. Handoffs carry bounded summaries plus Memory/Artifact references; agent conclusions enter
-the existing provisional Hidden-Agent candidate path and never directly mutate global Memory.
-
-Phase 12 adds an offline reliability campaign rather than a new production service. The runtime now ships reusable
-`SeededRandom`, `SyntheticConversationGenerator`, `FaultInjectionController`, normalized replay snapshots, and
-`ReliabilityInvariant` checks. SQLite-backed campaigns exercise 1k turns by default and a 10k-turn soak explicitly;
-they verify canonical History preservation, deterministic compaction boundaries, restart recovery, Artifact orphan
-detection, durable consolidation retries, and event-subscriber failure isolation. No API key or paid provider is
-required: external model and embedding intelligence remains replaceable by mocks/scripts while the Mnemos runtime and
-storage execute for real.
-
-The runtime emits `message.received`, `message.generated`, `context.pressure`, `context.compaction.requested`, `context.evicted`, the `memory.consolidation.*` / `memory.*` lifecycle events, compact `tool.*` lifecycle events, compact `ptc.started` / `ptc.completed` / `ptc.failed` lifecycle events, and `tool.discovery.searched`, `tool.discovery.described`, `tool.loaded`, and `tool.unloaded` discovery events.
-
-## Context compaction
-
-`CompactionService` treats History as canonical and immutable. When the visible working context exceeds the configured recent-raw budget or reaches high pressure, it:
-
-1. Reads canonical history after the durable session checkpoint.
-2. Selects a cutoff close to the target, preferring task, complete user/assistant turn, tool-transaction, and finally message boundaries.
-3. Retains the bounded recent raw tail, creates or replaces one session-scoped automatic pinned context, and persists the checkpoint.
-4. Emits `context.evicted` only after that pin and checkpoint have been updated.
-
-The event includes every evicted message and ID, an inclusive source range, the selected cutoff, the next retained message ID, and the new automatic pin. A future Hidden Agent can consume the event directly or re-read the canonical records; compaction never deletes them.
-
-For tool-aware boundaries, annotate related History messages with the same string `metadata.transactionId`. Optional `metadata.taskId` marks task transitions for higher-priority cutoff selection.
-
-The default pin generator is deterministic and bounded, so correctness does not depend on an LLM summary. A custom `CompactionSummarizer` may be supplied when richer summaries are wanted.
-
-## Long-term Memory
-
-`MemoryRecord` is a derived, fallible record. It never alters canonical History and always includes ordered `sourceReferences` (`sessionId` + stable History message ID) as well as the corresponding `sourceIds`.
-
-The Phase 3 model supports semantic, episodic, decision, preference, and entity records; confidence, importance, source type, confirmation time, status, entities, tags, and a durable supersede relation.
-
-`MemoryStore` is a Core abstraction. `SqliteMemoryStore` uses normalized source/entity/tag tables and SQLite FTS5 lexical search. Search defaults to active records, so superseded records are not surfaced as current facts unless callers explicitly include `statuses: ["superseded"]`.
-
-`MemoryService` provides the domain-level `get`, `search`, `source`, and `timeline` APIs. `source` resolves every reference through `HistoryStore` and fails clearly if canonical evidence is absent. `timeline` returns records ordered by creation time for an entity or tag, including explicit superseded-history queries.
-
-Superseding is an atomic store operation: it preserves the old record, changes it to `superseded`, and sets its successor. Self-supersession, missing successors, archived predecessors, and invalid successor statuses are rejected.
-
-## Hidden-agent consolidation
-
-`MemoryConsolidationService` is a background pipeline, separate from `Harness` and `ContextManager`:
+Mnemos is a TypeScript-first **cognitive harness**. It gives agent applications a durable runtime around model calls:
 
 ```text
-context.evicted → durable job → extract candidates → lexical retrieve
-→ reconcile proposal → runtime validation → MemoryService / MemoryStore
+Model providers
+      │
+      ▼
+Visible / worker agents ──► Context policy ──► bounded working context
+      │                              │
+      ├── Tools / PTC / discovery    ├── compaction
+      ├── Memory retrieval           └── pins and pressure controls
+      ├── Artifacts
+      └── Multi-agent tasks
+                     │
+                     ▼
+        Canonical History + SQLite persistence
 ```
 
-`HiddenAgent` has no `MemoryStore` capability. It returns only untrusted structured JSON, which is parsed with Zod before the runtime applies `new`, `duplicate`, `update`, `supersede`, or `irrelevant` operations. A `contradiction` is accepted only as an explicit intermediate judgment: the job fails retryably until it is reconciled into an update or supersession, so conflicting current facts are never silently persisted. The policy lives in a versioned module; `ModelProviderHiddenAgent` defaults to a separate 1M-token context budget without binding Core to a vendor SDK.
+The guiding rule is simple: **History is canonical; Memory, Context, indexes, and dashboards are derived.**
 
-Every proposal source must reference a real message from that job's evicted set in the same session. `MemoryService` then revalidates canonical History before each write. `assistant_inference` is capped at 0.5 confidence; it cannot silently become an explicit user fact.
+## What is complete
 
-`SqliteConsolidationJobStore` records `pending`, `running`, `completed`, and `failed` jobs. A SHA-256 key over the exact evicted message IDs deduplicates repeated event delivery. Writes use deterministic job-derived IDs, so post-crash retries converge instead of producing duplicate Memory. Interrupted `running` jobs are requeued when a new worker begins processing; failed jobs require an explicit `retry(jobId)`.
+The complete backend roadmap (Phases 1–14) and frontend roadmap (F1–F6) are implemented.
 
-Attach the service to the event bus, then run its worker separately from visible requests:
+| Area | Delivered |
+| --- | --- |
+| Runtime | Harness, append-only History, State, cancellation, lifecycle events |
+| Context | Semantic compaction, pinned context, pressure levels, safe headroom, policy preflight |
+| Memory | Long-term records, hybrid retrieval, source tracing, consolidation, reinforcement, decay, stale detection, merge, abstraction, entity projections |
+| Data | SQLite stores, immutable Artifacts, spill/range/query APIs, migrations and index rebuilds |
+| Tools | Registry, Dispatcher, permissions, structured results, audit, native tool loop, dynamic discovery |
+| PTC | `run_code`, generated TypeScript SDK, RPC-only tool access, quotas, scheduler barriers, isolated subprocess backend |
+| Operations | Durable jobs, worker leases, provider reliability, metrics/tracing abstractions, health/readiness, diagnostics, retention and shutdown boundaries |
+| Agents | Bounded Planner/Researcher/Coder/Reviewer roles, task DAGs, delegation, handoffs, budgets, review/replan limits and recovery |
+| Console | Chat, streaming, Context/Memory, Artifacts, Tools, PTC, Agents, Tasks, Dashboard and Operations views |
 
-```ts
-const stop = consolidation.attach(harness.events);
-await consolidation.processAvailable(); // invoke from a background worker loop
-stop();
-```
+There is **no F7**. F6 is the final frontend milestone and Phase 14 is the final backend milestone.
 
-`consolidation.remember({ sessionId, candidate })` is the safe `memory.remember()` domain entry point for a Visible Agent. It first checks that the candidate's source messages exist in canonical History, then persists a `visible-candidate` consolidation job. The candidate is merely a hint to the Hidden Agent; it cannot write Memory directly.
+## Console
 
-Memory lifecycle events are emitted only around completed state transitions. Subscriber exceptions are caught by the consolidation service and cannot roll back or partially complete a Memory transaction.
+The React console is a read-oriented operator and chat surface over the runtime. It never becomes a second source of truth.
 
-## Hybrid Memory Retrieval
+- **Chat** — session switching, canonical message history, Markdown/code rendering, streaming deltas, runtime activity, Stop, retry and refresh recovery.
+- **Context & Memory** — pressure and budget breakdown, pins, compaction ranges, retrieval explanations and source links back to History.
+- **Artifacts, Tools & PTC** — bounded previews/ranges/queries, ToolRegistry catalog, loaded schemas, PTC timelines, barriers, quotas and spill handles.
+- **Agents & Tasks** — role summaries, task states, dependencies, delegation/handoff edges and a lazy-loaded React Flow graph.
+- **Dashboard & Operations** — live runtime metrics, health/readiness, workers/jobs, migrations, storage, sandbox, provider and audit summaries.
 
-`MemoryRetriever` is now the single upper-layer API. It accepts a query plus optional type, status, source-type, entity, tag, confidence, time-range, and source-session filters, and returns explainable `MemoryRetrievalResult` entries:
+The console uses TanStack Query for server state and Zustand only for UI preferences. Recharts and React Flow are lazy-loaded. API responses are shared Zod DTOs and are bounded by design: large bodies, raw tool results, secrets, and private reasoning are not sent to the browser.
 
-```text
-query normalization
-  ├─ FTS5 lexical candidates
-  ├─ local vector semantic candidates
-  └─ entity candidates
-        ↓
-metadata filtering → reciprocal-rank fusion → deterministic reranker → Top K
-```
-
-`HybridMemoryRetriever` deliberately fuses ranks with Reciprocal Rank Fusion rather than adding incompatible FTS5 BM25 and cosine-similarity scales. Results expose lexical, semantic, entity, recency, confidence, and status signals together with `matchedBy` reasons. Current-fact queries default to `active`; callers must explicitly request `superseded` records for historical queries.
-
-`EmbeddingProvider` is independent of `ModelProvider`. `DeterministicEmbeddingProvider` is supplied for offline tests; production hosts can supply OpenAI, Gemini, Voyage, Jina, local, or OpenAI-compatible adapters without changing Core.
-
-`MemoryEmbeddingIndexer` is attached to `MemoryService` as a derived-index lifecycle hook. Creation and content updates embed; metadata-only updates reuse the prior vector; supersession refreshes index metadata for both records. Every vector record stores model/version, dimensions, content hash, and retrieval metadata. `indexer.rebuild()` replaces the index from canonical Memory, so the index is never a source of truth.
-
-Hosts construct `HybridMemoryRetriever` with their `EmbeddingProvider` and `MemoryVectorStore`, then inject it into `MemoryConsolidationService`. Consolidation itself is unchanged: it receives ranked records through `MemoryRetriever` and continues to own only proposal validation and canonical Memory transitions.
-
-The current local backend is `SqliteMemoryVectorStore`. `sqlite-vec` is not installed as a compatible `better-sqlite3` extension in this workspace, so Phase 5 uses a reliable SQLite metadata table with persisted normalized vectors and Top-K vector-ID retrieval. It scans derived vectors—not canonical Memory rows—and hydrates only fused candidates. A future sqlite-vec adapter can implement the same `MemoryVectorStore` contract.
-
-Phase 4 consolidation accepts this same retriever unchanged. The fixed Phase 5 evaluation fixture covers exact lexical match, semantic paraphrase, symbols, entity retrieval, current vs historical facts, and confidence; its deterministic tests compute Recall@K, Hit@K, and MRR.
-
-## Artifact Store
-
-Phase 6 keeps large, intermediate data out of visible-agent Context. `ArtifactStore` is a Core contract with `create`, `get`, `read`, `query`, `delete`, `verify`, expiry cleanup, and orphan recovery operations. `SqliteArtifactStore` is the default implementation:
-
-```text
-Artifact metadata + derived text-line index → SQLite
-Immutable Artifact body                    → configured local filesystem directory
-Visible-agent context                      → small artifact:// handle only
-```
-
-An `ArtifactRecord` contains scope (`session` or `persistent`), optional expiry, MIME/type, byte size, SHA-256 checksum, summary, and opaque internal storage location. Its public `ArtifactHandle` deliberately excludes the storage location and body. `ContextManager.buildVisible(..., artifactHandles)` accounts only for handle text, never body bytes.
-
-Bodies use generated UUID filenames rather than display names, remain confined to the configured storage directory, are written to a temporary file and atomically renamed before metadata is published, and are checksum-verified on full reads or with `verify`. Metadata reads do not touch body files. Range reads use filesystem offsets; text query runs locally against a bounded, rebuildable line/chunk index and rejects binary MIME types. A missing body remains visible in metadata and raises a specific error on body operations so it can be diagnosed or cleaned up safely.
-
-`ArtifactSpillService` is used by the Phase 7 dispatcher: small strings may remain inline; binary values and larger strings or streams are stored and returned as an `artifact://…` handle. It consumes `string`, `Uint8Array`, or `AsyncIterable<Uint8Array>` without converting a stream into a giant context string.
-
-## Tool Runtime
-
-Phase 7 adds the formal execution path for all current and future tools:
-
-```text
-Model ToolCall → ToolRegistry → permission check → Zod validation
-→ timeout-aware execution → output normalization / Artifact spill
-→ audit + tool lifecycle event → structured ToolResult
-```
-
-`ToolDefinition` provides a stable dotted name (plus reserved runtime entry point `run_code`), description, Zod input/output schemas, explicit execution context, required permissions, side-effect classification (`none`, `read`, `write`, `destructive`), concurrency hint, and optional timeout. `ToolRegistry` only owns registration and discovery of definitions; `ToolDispatcher` is the sole execution gate for native calls and PTC subcalls.
-
-Dispatcher results are either a bounded inline value or an Artifact handle. Invalid arguments, missing tools, denied permissions, timeouts, invalid output, spill failures, and execution exceptions return structured, model-safe error envelopes; internal exception text and stacks are never returned to the model. The output policy has independent inline, spill, and model-visible byte limits. Binary output is always externalized.
-
-The initial cognitive tool set is:
-
-- `memory.search`, `memory.get`, `memory.source`, `memory.timeline`, `memory.remember`
-- `history.search`, `history.get`
-- `context.inspect`, `context.pin`, `context.unpin`
-- `context.request_compaction`
-- `state.get`, `state.set`, `state.patch`
-- `artifact.get`, `artifact.read`, `artifact.query`, `artifact.create`, `artifact.delete`
-
-`memory.remember` calls the existing consolidation-job path only; it cannot mutate canonical Memory. `artifact.read` is range-limited for model calls, and oversized text or any binary result is spilled by the dispatcher. `history.search` is deliberately a bounded basic lexical scan at this stage, not a second RAG implementation.
-
-Permissions are host-provided in `ToolDispatchContext` (`sessionId`, `agentId`, `principal`, granted `domain:verb` permissions) and cannot be elevated by model arguments. `ToolAuditStore` is a replaceable audit boundary; `InMemoryToolAuditStore` records principal, tool, call ID, timing, success/denial/failure, and spill status. Events (`tool.called`, `tool.completed`, `tool.failed`, `tool.denied`, `tool.output.spilled`) contain identifiers, timing, status, and handles only—not raw arguments or large outputs.
-
-Zod remains the single authored schema. The registry exports a deterministic JSON Schema subset for provider-neutral `ModelToolDeclaration`s; no vendor SDK types enter Core. `ModelProvider` can now return normal text or a native tool-call response. When `Harness` receives a tool-call response, it records an assistant tool-call message and paired tool result in append-only History, dispatches through the sole runtime entry point, rebuilds Context, and asks the model to continue. `maxToolIterations` terminates loops safely. Tool declaration, tool-call, and tool-result tokens are all included in Context accounting; spilled results record only their small handles in History.
-
-## Programmatic Tool Calling
-
-Phase 8 introduces run_code as an ordinary registered Tool:
-
-    Visible Agent -> run_code -> PtcRuntime -> isolated child process
-    -> generated tools.* SDK / IPC -> PtcToolScheduler -> ToolDispatcher -> actual Tool
-
-PtcSdkGenerator derives TypeScript declarations and the catalog from existing ToolRegistry JSON Schema descriptors. There is no second PTC-only tool contract. The sandbox receives no stores, Dispatcher, filesystem path, database object, environment, or actual tool implementation. A tools.memory.search(input) call is an RPC request whose host side reconstructs identity and permissions from the original execution context before calling ToolDispatcher.
-
-ToolExecutionMode is configurable per Harness: native exposes normal tools except run_code; ptc exposes only run_code; both exposes both. When PTC is enabled, Harness passes versioned ptc-policy/v1 instructions and the generated SDK catalog as ModelRequest.runtimeInstructions, and accounts for them alongside visible tool schemas. The default remains native for a Phase 7-only Registry; a Registry with a registered PtcRuntime defaults to both.
-
-Each invocation gets a fresh Node child process, an empty environment, a private temporary working directory, Node Permission Model deny-by-default filesystem/child-process/worker/addon/WASI capabilities, bounded IPC, a V8 old-space limit, a parent-enforced wall-clock deadline, and cleanup after termination. TypeScript is stripped/transformed host-side; imports, require, process, direct network APIs, and other ambient-capability spellings are rejected before launch. The program can only use tools.*; no code parameter can add a permission.
-
-This is an isolated development backend, not a claim of production-grade hostile-code confinement. Node's Permission Model has no general OS-level network-deny switch, and language-level source rejection is defense in depth rather than a complete adversarial-JavaScript proof. Phase 13 supplies the same `PtcSandboxBackend` capability interface and a fail-closed container adapter, but this repository does not ship an enabled image-backed runner. Do not enable generated-code execution for mutually untrusted tenants until a separately reviewed Docker, gVisor, Firecracker, or equivalent network-isolated backend is configured.
-
-The memory setting is a V8 old-space ceiling for the child process, so Node/runtime minimums and external/native allocations can make it less precise than a cgroup/container memory limit. The parent still isolates a crash from Mnemos and converts obvious heap exhaustion into a structured PTC error; production hardening needs an OS-level memory controller.
-
-PtcToolScheduler consults the existing Tool metadata. concurrencySafe none/read calls can overlap up to maxConcurrentToolCalls; writes, destructive tools, and non-concurrency-safe calls wait for preceding reads and form a barrier for following work. PTC enforces maxToolCalls, maxExecutionMs, maxMemoryMb, maxToolArgumentBytes, bounded logs, and separate inline/transport result byte limits. Inner Dispatcher results already follow Artifact spill; a large final PTC result is force-spilled as a ptc-result Artifact handle. Only the single run_code request/result pair enters conversational History and visible Context; all inner calls remain in dispatcher audit/events.
-
-Register it explicitly in a host composition root:
-
-    const ptc = new PtcRuntime({ registry, dispatcher, artifactSpill, events });
-    registerPtcTool(registry, ptc);
-    const harness = new Harness({
-      history, state, provider,
-      toolRuntime: {
-        registry, dispatcher, ptc, executionMode: "both",
-        grantedPermissions: ["tool:execute", "memory:read", "history:read"],
-      },
-    });
-
-## Dynamic Tool Discovery
-
-Phase 9 adds a metadata index and a bounded, session-scoped loaded-tool set. Discovery is a normal part of the same runtime boundary:
-
-```text
-Visible Agent → ToolDispatcher → tools.search / tools.describe
-             → ToolDiscoveryIndex → LoadedToolSet
-             → native declarations or filtered PTC SDK → ToolDispatcher
-```
-
-`ToolRegistry` remains the canonical source of definitions. `ToolDiscoveryIndex` is a rebuildable lexical index derived from the Registry; registration, update, and removal notifications keep it current, while `toolSchemaHash` provides a stable short fingerprint for snapshots and audit metadata. Metadata such as namespace, summary, tags, capabilities, provider, version, visibility, permissions, side effects, and concurrency hints is authored on `ToolDefinition` and exported to both native and PTC surfaces—there is no second discovery contract.
-
-`registerToolDiscoveryTools(registry, discovery)` registers the formal `tools.search` and `tools.describe` definitions. Both go through `ToolDispatcher`, require the host-granted `tools:read` permission, and return bounded structured results. Search is deterministic lexical ranking (exact name/namespace, token, tag, capability, and description signals) with namespace/capability/side-effect/provider filters. Describe returns complete JSON schemas only for selected, permission-available tools and loads them into the current session.
-
-`ToolExposurePolicy` controls the core catalog, maximum dynamic tools, schema-token budget, result bytes, and describe batch size. Core tools are always preferred; dynamic schemas are loaded only after describe and are evicted deterministically by LRU when count or budget limits are reached. A request receives a stable declaration snapshot. A later Registry mutation affects later snapshots, while a stale or unloaded call is still rejected by `ToolDispatcher` with `tool_not_found`.
-
-With `Harness.toolRuntime.discovery`, native mode exposes the core plus loaded dynamic schemas (and never the whole Registry). In `ptc` mode the model still sees `run_code` and discovery tools, while `PtcSdkGenerator` receives only the current host-selected catalog. `both` keeps both surfaces. Permission visibility is advisory in search (unavailable candidates are marked) and authoritative in `tools.describe`, the Dispatcher, and PTC RPC; generated arguments, forged identities, and raw RPC fields cannot grant access.
-
-Discovery state is process-local and session-scoped. Search/describe outputs and discovery events contain bounded metadata and schema hashes, not large tool results. Full schemas count against Context through the existing schema accounting. Internal tool calls remain in audit/history as ordinary tool calls; they are not silently injected as extra model turns.
-
-Phase 9 intentionally remains lexical and local. It does not add semantic embeddings, MCP, `tools.describe`-style dynamic external connectors, browser/shell access, or a production distributed sandbox. Dynamic discovery remains a local derived index; sandbox hardening is documented separately under the current Phase 13 boundary.
-
-## Context Intelligence
-
-Phase 10 adds runtime-owned context telemetry and deterministic policy decisions. `ContextStats` now reports physical availability separately from `safeHeadroomTokens` after the mandatory `generationReserveTokens`. It includes system, pinned, recent raw, retrieved-memory, tool-result, artifact-handle, and tool-schema accounting plus a stable pressure level: `NORMAL`, `ELEVATED`, `HIGH`, `COMPACTION`, or `EMERGENCY`.
-
-`ContextPolicyEngine` applies configurable thresholds and session-scoped hysteresis. It emits typed recommendations such as `prefer_ptc`, `prefer_artifact`, `limit_memory_retrieval`, `avoid_loading_more_tools`, and `request_compaction`; recommendations do not grant the model ContextManager authority. At `EMERGENCY`, Harness preflight is enforced: it attempts safe compaction and refuses to invoke the provider unless `usedTokens + generationReserveTokens <= contextLimit`.
-
-The cognitive context tools are bounded runtime capabilities:
-
-- `context.inspect` returns only the current session's safe telemetry, pins, visible message IDs, and policy decision.
-- `context.pin` creates a `visible-agent` pin with an independent budget, normalized-content dedupe, optional turn TTL, and restricted priority.
-- `context.unpin` can remove only the caller's own agent pins; system and automatic-compaction pins are protected.
-- `context.request_compaction` requests a safe runtime action; the agent cannot choose a cutoff or delete History.
-
-Memory retrieval is packed against the policy's effective retrieval-token budget. Phase 9 dynamic schema sets can be reduced under pressure, while core tools remain available. Artifact handles and PTC final results continue to use the Phase 6/8 spill paths. Canonical History remains untouched, and semantic boundaries still protect tool transactions during compaction.
-
-The current policy is deterministic and process-local. It does not implement adaptive learned routing, wall-clock pin expiry, semantic pin dedupe, or a separate Hidden Agent context policy; those remain future work.
-
-## Memory Intelligence
-
-Phase 11 adds a deterministic `MemoryIntelligenceService` between Hidden Agent proposals and `MemoryStore`. It keeps History canonical and treats every reinforcement, merge, abstraction, stale mark, decay score, and entity relationship as rebuildable derived state with source provenance.
-
-- Reinforcement unions distinct `(sessionId, messageId)` evidence, is idempotent across retries, saturates confirmation/reinforcement scores, and evolves confidence with source-type caps. Repeated assistant inference cannot become an explicit fact by repetition.
-- Effective retrieval signals combine similarity, confidence, importance, reinforcement, type/durability-aware time decay, stale status, and lifecycle status. Decay is recomputed from timestamps and policy; stale records remain queryable and are not deleted.
-- Repeated episodic events can form a semantic abstraction only after configurable event-count, time-span, confidence, and evidence-diversity thresholds. Compatible records can merge into a provenance-preserving active record while originals remain archived with `mergedInto`; temporal replacement remains the separate `supersede` operation.
-- A lightweight SQLite entity projection canonicalizes aliases such as `Postgres`/`PostgreSQL`, stores relationship provenance, emits entity lifecycle events, and can be cleared and rebuilt from Memory. Project/session scopes prevent cross-scope merges.
-- `MemoryIntelligenceAuditStore` is replaceable; the default SQLite implementation records operation, memory IDs, source IDs, policy version, reason, and timestamp without storing raw model output.
-
-The default maintenance path is explicit and deterministic (`runMaintenance()`); no daemon or API key is required. `MockModelProvider`/scripted proposals and deterministic embeddings are used at the external intelligence boundary, while MemoryStore, HistoryStore, retrieval, consolidation, source tracing, SQLite persistence, and runtime policy execute for real. Optional live-provider tests must be run explicitly and skip when credentials are unavailable.
-
-## Requirements
-
-- Node.js 22+
-- pnpm 11+
-
-## Commands
+For local demo and browser tests, the server provides a deterministic in-memory adapter with no provider credentials:
 
 ```bash
 pnpm install
 pnpm build
+
+# terminal 1
+pnpm dev:server       # http://127.0.0.1:4317
+
+# terminal 2
+pnpm dev:console      # http://127.0.0.1:5173
+```
+
+Production composition should inject adapters backed by the real Harness, ContextManager, MemoryRetriever, ArtifactStore, ToolRegistry, PtcRuntime, task stores, MetricsSink, and diagnostics services.
+
+More console details: [docs/console.md](docs/console.md).
+
+## Runtime principles
+
+### Canonical data and derived views
+
+History is append-only and is never deleted by compaction or memory maintenance. Memory records retain ordered source references that resolve through History. Vector, FTS, entity, discovery, and dashboard projections can be rebuilt.
+
+### One authority boundary for tools
+
+Every native, discovered, and PTC tool call follows the same path:
+
+```text
+ToolRegistry → ToolDispatcher → permission/schema checks → timeout
+             → output policy / Artifact spill → audit + lifecycle event
+```
+
+PTC receives only a generated `tools.*` SDK. It never receives a Store, Dispatcher instance, database, host filesystem, secrets, or arbitrary modules. `native`, `ptc`, and `both` exposure modes are configurable per runtime/agent.
+
+### Bounded multi-agent execution
+
+Agent definitions are host-owned configuration. Runtime instances receive independent context, state, tools, providers, permissions, and budgets while sharing the durable stores. Delegation depth, child tasks, concurrency, review loops, replans, cancellation, and task retries are bounded and observable.
+
+## Security boundaries
+
+Mnemos separates:
+
+- trusted runtime code and host configuration;
+- untrusted model output and generated PTC code;
+- canonical data and rebuildable indexes;
+- model-visible context and execution/audit history;
+- tool authority and agent-provided arguments.
+
+The default PTC backend is a **development subprocess**, not a hostile-tenant security boundary. It uses a fresh process, empty environment, temporary scratch directory, Node permission flags, source restrictions, wall-clock termination, quotas, and bounded IPC. Node alone cannot provide a complete OS-level network/memory isolation guarantee. The production container backend fails closed unless an explicitly configured image runner is available. Do not enable generated-code execution for mutually untrusted tenants without a separately reviewed Docker, gVisor, Firecracker, or equivalent deployment.
+
+Authentication and authorization are deployment responsibilities; the demo console is intentionally unauthenticated.
+
+## Development commands
+
+Requirements: Node.js 22+ and pnpm 11+.
+
+```bash
+pnpm install
+
+# build and type safety
+pnpm build
 pnpm typecheck
+
+# tests
 pnpm test
+pnpm test:server
+pnpm test:console
+pnpm test:e2e
+
+# deterministic, API-key-free evaluations
 pnpm eval:retrieval
 pnpm eval:ptc
 pnpm eval:tools
@@ -260,165 +133,32 @@ pnpm eval:reliability
 pnpm eval:soak
 pnpm eval:agents
 pnpm eval:agents:soak
-pnpm test:server
-pnpm test:console
-pnpm test:e2e
-pnpm dev:server
-pnpm dev:console
+
+# operational helpers
 pnpm mnemos doctor
 pnpm mnemos migrate
 pnpm mnemos rebuild-indexes
 pnpm chat
 ```
 
-`pnpm chat` stores data in `./mnemos.sqlite` by default. Set `MNEMOS_DB_PATH` and `MNEMOS_SESSION_ID` to choose the database location and conversation session. The CLI intentionally remains a minimal mock chat host; embedders enable the native tool loop by supplying `ToolRegistry`, `ToolDispatcher`, and host-granted permissions to `Harness`.
+All default tests and evaluations use mock/scripted providers, deterministic embeddings, synthetic workloads, simulated clocks, and fault injection. No paid model API key is required. Optional live-provider checks, if added by a host, must skip when credentials are unavailable.
 
-## Production runtime hardening
+`pnpm chat` uses `./mnemos.sqlite` by default. Set `MNEMOS_DB_PATH` and `MNEMOS_SESSION_ID` to choose the database and session.
 
-`resolveRuntimeConfig()` owns the validated `development`/`test`/`production` profile. Precedence is defaults, config
-file, known environment overrides, then explicit runtime overrides; invalid values fail before runtime startup.
-`EnvironmentSecretProvider` is replaceable, and `redactSecrets()` is used by the in-memory structured logger and
-diagnostic-facing paths. Secrets are never intended to be written to History, compact audit rows, or diagnostics.
+## Repository map
 
-`SqliteDurableJobQueue` provides transactional claim, worker leases, heartbeat, retry/failure transitions, expired-lease
-recovery, and WAL/busy-timeout configuration. `DurableWorker` bounds concurrency and stops claiming on shutdown.
-`SqliteToolAuditStore` persists only identifiers, status, duration, output kind, and error code; `cleanup()` enforces
-row/age retention independently of canonical History. `SqliteArtifactStore` can enforce a committed-body byte quota;
-expired artifacts are the only bodies eligible for automatic cleanup.
-
-Provider calls can use `ProviderReliabilityExecutor` for classified retry/backoff/jitter, rate/concurrency limiting,
-timeouts, circuit breaking, usage/cost accounting, and token/cost budget guards. `InMemoryMetricsSink` and
-`InMemoryTracer` are replaceable adapters, so no Prometheus or OpenTelemetry service is required for local operation.
-`RuntimeHealthService` separates cheap liveness from dependency readiness. The CLI exposes `mnemos doctor`, `mnemos
-migrate`, `mnemos rebuild-indexes`, and `mnemos diagnostics`.
-
-PTC now has an explicit `PtcSandboxBackend` capability boundary. The existing Node subprocess is labeled
-`development-subprocess`; `ContainerSandboxBackend` fails closed unless Docker is available and an image-backed runner
-is explicitly configured. This repository does not claim production hostile-code isolation on machines without that
-backend. Network remains denied and filesystem access is scratch-only by contract.
-
-`Dockerfile` and `docker-compose.yml` provide a minimal non-root, read-only-rootfs deployment example with a persistent
-`/data` volume and `mnemos doctor` healthcheck. The image runs the CLI runtime; it does not turn the CLI into an HTTP
-server, and Docker itself is not silently used as the PTC backend. Configure a separately reviewed container sandbox
-runner before enabling `production-container` for untrusted generated code.
-
-## Reliability and evaluation
-
-`pnpm eval:reliability` runs the deterministic 1k-turn campaign and prints compaction count, evicted message count,
-peak visible context, p50/p95 compaction latency, and total duration. `pnpm eval:soak` runs the same workload at 10k
-turns; it is intentionally explicit because it takes longer than the default unit suite. Both commands use temporary
-SQLite databases and clean them up after completion.
-
-Reliability checks are deliberately normalized: UUIDs and timestamps are ignored when comparing replayed logical
-state, while History content, Memory provenance/status, compaction source ranges, Artifact metadata, and job state are
-kept. Fault schedules are deterministic and can model throw, timeout, or malformed-return failures. Event subscribers
-are observational; a failing subscriber cannot invalidate a completed core operation.
-
-The campaign is not a claim that every deployment concern is solved. Audit storage and metrics are local adapters,
-vector fallback is SQLite-based, and the available PTC container backend fails closed until an image-backed runner is
-configured. External observability, enterprise authentication, and a production sandbox fleet remain deployment work.
-
-## Multi-Agent Runtime
-
-`AgentRegistry` validates stable role definitions and only permits safe updates to descriptive fields. Authority-bearing
-permissions, tool exposure, PTC mode, context policy, and budgets are host configuration. Built-in presets are
-`planner`, `researcher`, `coder`, `reviewer`, `visible.general`, and `hidden.memory`.
-
-`AgentRuntime` instances are session/task scoped. Every instance owns an independent ContextManager, pins, context
-budget, local state map, abort signal, provider binding, and effective permissions. Shared task state uses an
-optimistic revision store. `AgentArtifactWorkspace` adds task/session/private/shared visibility over opaque Artifact
-handles; bodies remain in the shared ArtifactStore and are never copied into handoffs.
-
-`AgentTask` is a bounded state machine (`pending`, `running`, `waiting`, `completed`, `failed`, `cancelled`,
-`blocked`) with parent/dependency links, revisions, attempts, leases, and output references. `TaskManager` validates
-transitions and rejects dependency cycles. `SqliteAgentTaskStore` persists the graph and atomically claims ready work
-with lease recovery. `MultiAgentOrchestrator` schedules independent tasks in parallel, gates dependent tasks, carries
-bounded handoffs, and keeps a single user-visible root result. Fail-fast and continue-with-partial are the only failure
-policies; review loops and replans are explicitly bounded.
-
-Delegation always intersects child permissions with the parent/runtime authority and allocates a bounded child budget.
-Agent-created Memory candidates are forced to `assistant_inference`/`provisional` and must enter the existing
-Hidden-Agent consolidation pipeline. Role-aware retrieval narrows the shared `MemoryRetriever`; it does not create a
-second RAG system. `agentCanUseTool`, `invokeTool`, and `executePtc` preserve ToolDispatcher/PTC authority and usage
-budgets for each instance.
-
-`pnpm eval:agents` runs deterministic planning, parallel delegation, dependencies, handoffs, role/tool isolation, and
-memory-candidate checks. `pnpm eval:agents:soak` runs 150 roots with five children each and more than 1,000 mock agent
-invocations. No API key is required.
-
-## Phase 13 extension points
-
-Phase 13 leaves stable boundaries for later deployment work: `DurableJobQueue`/`DurableWorker`,
-`SecretProvider`, `MetricsSink`, `Tracer`, `ProviderReliabilityExecutor`, `PtcSandboxBackend`,
-`SqliteMigrationRunner`, `RuntimeHealthService`, and the persistent `SqliteToolAuditStore`. Dynamic discovery and all
-tool authority remain behind `ToolDiscoveryIndex`, `LoadedToolSet`, and `ToolDispatcher`. Phase 14 Multi-Agent
-Extensions consume these boundaries through `AgentRegistry`, `TaskManager`, `SqliteAgentTaskStore`,
-`MultiAgentOrchestrator`, `HandoffContextBuilder`, and `AgentArtifactWorkspace`. No Phase 15 is implemented.
-
-## Web Console — Frontend F6 (complete)
-
-Frontend F3 (Context + Memory Inspector) builds on the F2 chat workbench and F1 observer surface over the existing runtime; it
-does not replace the Harness or become a second source of truth. The workspace now contains:
-
-- `packages/contracts`: Zod-authored, versioned public DTOs shared by the server and React client.
-- `apps/server`: a dependency-injected Fastify adapter exposing `/api/v1/meta`, health/readiness, runtime summary,
-  paginated sessions, safe session detail, and an allowlisted SSE event stream.
-- `apps/console`: React 19 + Vite + TanStack Router/Query + Zustand + Tailwind UI primitives. Overview, Sessions,
-  read-only session details, live Events, and safe Settings pages are available with responsive navigation and
-  system/light/dark themes.
-
-The API maps internal runtime data into bounded DTOs. SSE publishes only safe metadata from an allowlist, truncates
-large payloads, sends keepalive comments, and removes EventBus listeners on disconnect. The console keeps a bounded
-live debug buffer; it is not the canonical audit log. The runtime remains authoritative, and browser disconnects do
-not own or stop it. Production deployments must provide their own authentication boundary; F1 does not expose an auth
-system. CORS is configured explicitly and the development-only demo seed route is disabled in production.
-
-For offline development and browser tests, the server has an in-memory deterministic test/demo runtime. It needs no
-provider credentials and is never enabled by the production profile. Start the two processes with:
-
-```bash
-pnpm build
-pnpm dev:server   # terminal 1, API on 127.0.0.1:4317
-pnpm dev:console  # terminal 2, Vite on 127.0.0.1:5173
+```text
+apps/server      Fastify API adapter and deterministic console runtime
+apps/console     React/Vite web console
+apps/cli         Interactive local chat shell
+packages/core    Harness, context, memory, tools, PTC, agents and policies
+packages/storage SQLite persistence, artifacts, jobs, indexes and audits
+packages/contracts Shared Zod DTOs for server/console boundaries
+docs/            Design and console documentation
 ```
 
-Frontend verification is available through `pnpm test:server`, `pnpm test:console`, and `pnpm test:e2e` (Chromium).
-The full CI workflow runs these in addition to every existing backend build, test, and offline evaluation. Console
-assets remain intentionally modest (the exact bundle is reported by Vite). F3 adds read-only Context telemetry, pressure/policy breakdown,
-pin and compaction timelines, a Memory Explorer, retrieval explanations, and canonical History provenance links;
-it deliberately does not add Monaco, Artifact browser, React Flow, auth UI, or a provider key manager.
+Read [DESIGN.md](DESIGN.md) for the complete architecture, invariants, phase history, and extension points.
 
-F2 adds a runtime-owned `ChatRuntimeService` boundary. The Fastify adapter exposes session creation, canonical
-message reads, message submission, retry/regenerate, cancellation, and a separate named SSE stream for assistant
-generation events (`started`, `text_delta`, `activity`, `completed`, `cancelled`, `failed`). The stream has a bounded
-replay buffer per generation, so a browser can safely POST first and subscribe immediately afterwards. The server
-never runs an Agent loop; production composition can inject a Harness-backed implementation, while the development
-and test profiles use the deterministic in-memory adapter.
+## License
 
-The Console chat route is a responsive three-column workbench: session rail, conversation/composer, and a compact
-runtime inspector. Conversation data remains TanStack Query server state; Zustand still stores UI preferences only.
-Markdown, fenced code blocks with copy, lists, tables, links, Enter-to-send/Shift+Enter, Stop, retry, activity chips,
-loading/error states, and refresh recovery are covered by offline tests and Chromium E2E. Demo prompts containing
-`[tool]`, `[ptc]`, `[compact]`, `[long]`, or `[fail]` exercise safe deterministic activity/failure fixtures; they are
-not production routing rules. Cancellation marks the assistant attempt as `cancelled` in the runtime-owned history,
-and retry appends a new attempt while preserving the original message.
-
-F3 extends the inspector with runtime-owned, bounded read APIs: `/sessions/:id/context`, `/memory`, memory detail and
-source endpoints, retrieval explanations, and session-scoped canonical History navigation. Context composition reports
-system, pins, recent raw, retrieved memory, tool results, schemas, artifact handles, reserve, safe headroom, pressure
-level, policy actions, pins, and compaction source ranges. The `/memory` Explorer exposes lifecycle status, confidence,
-reinforcement, stale state, scope, timeline, and provenance without making the browser a second source of truth.
-The deterministic demo fixtures are offline-only; production adapters must map the same DTOs from real ContextManager,
-MemoryRetriever, MemoryStore, and HistoryStore implementations.
-
-F4–F6 complete the read-only operator surface. `/artifacts` provides paginated metadata, bounded previews, range reads,
-and query matches; `/tools` exposes the shared ToolRegistry catalog and loaded set; `/ptc` shows bounded execution timelines,
-barriers, quotas, and Artifact spills. `/agents` and `/tasks` show role/budget summaries, task dependencies, delegation,
-handoffs, and a responsive task graph. The upgraded Overview is a runtime dashboard with actual metrics and Recharts
-trends, while `/operations` reports health/readiness, workers/jobs, migrations, storage, sandbox capabilities, provider,
-and audit summaries. React Flow and Recharts are lazy-loaded; all list and body endpoints are bounded and use TanStack Query
-server state. SSE invalidates task/agent/PTC/dashboard queries without exposing private reasoning.
-
-The demo adapter is deterministic and offline-only. It demonstrates the DTO and browser contract; a production host must
-inject adapters backed by ArtifactStore, ToolRegistry/Discovery, PtcRuntime, AgentTask stores, MetricsSink, and diagnostics.
-The Console never executes tools, PTC, or task mutations directly, and it does not claim authentication/authorization.
+Mnemos is released under the [MIT License](LICENSE).
