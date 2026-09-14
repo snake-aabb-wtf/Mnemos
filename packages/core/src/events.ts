@@ -137,6 +137,17 @@ export interface HarnessEventMap {
   };
   "tool.loaded": { sessionId: string; agentId: string; toolNames: readonly string[]; schemaTokenEstimate: number };
   "tool.unloaded": { sessionId: string; agentId: string; toolNames: readonly string[]; reason: "lru" | "budget" | "registry" };
+  "agent.registered": { agentId: string; role: string };
+  "agent.started": { agentId: string; instanceId: string; taskId: string; sessionId: string };
+  "agent.completed": { agentId: string; instanceId: string; taskId: string; sessionId: string; status: "completed" | "partial" };
+  "agent.failed": { agentId: string; instanceId: string; taskId: string; sessionId: string; errorCode: string };
+  "task.created": { taskId: string; parentTaskId?: string; agentId?: string; sessionId: string };
+  "task.assigned": { taskId: string; agentId: string; sessionId: string };
+  "task.started": { taskId: string; agentId: string; sessionId: string; attempt: number };
+  "task.completed": { taskId: string; agentId: string; sessionId: string };
+  "task.failed": { taskId: string; agentId?: string; sessionId: string; errorCode: string };
+  "task.cancelled": { taskId: string; sessionId: string; reason: string };
+  "agent.handoff": { messageId: string; taskId: string; senderAgentId: string; receiverAgentId: string; tokenEstimate: number; artifactCount: number; memoryCount: number };
 }
 
 type Listener<T> = (payload: T) => void | Promise<void>;

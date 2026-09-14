@@ -24,3 +24,6 @@ export * from "./jobs.js";
 export * from "./sandbox.js";
 export * from "./health.js";
 export * from "./lifecycle.js";
+export * from "./agents.js";
+export * from "./tasks.js";
+export * from "./multi-agent.js";

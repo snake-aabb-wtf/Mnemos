@@ -1714,14 +1714,15 @@ contract。Artifact store 支持 committed-body byte quota，只有过期 Artifa
 subprocess 明确标记为 development boundary；`ContainerSandboxBackend` 在 Docker/image runner 不可用时 fail
 closed，不将 Node subprocess 虚假宣传为 hostile-code production isolation。
 
-Phase 13 的 CI 仍运行 Phase 1–12 全部 build/typecheck/test/eval/soak。Phase 14 的 Multi-Agent planner、
-researcher、coder、reviewer 等 cognition 尚未实现。
+Phase 13 的 CI 继续运行 Phase 1–12 全部 build/typecheck/test/eval/soak，并增加 Phase 14 的 deterministic
+multi-agent eval/soak。Phase 14 同样保持 no-API-key policy；真实 Provider smoke test 只能显式运行且无凭据时
+SKIP。
 
 ---
 
 # Phase 14 — Multi-Agent Extensions
 
-到这个阶段才考虑扩展：
+Phase 14 已在共享 Harness 基础设施上实现 bounded Multi-Agent Runtime：
 
 ```text
 planner
@@ -1742,6 +1743,23 @@ State
 ```
 
 避免每个 Agent 各造一套记忆系统。
+
+`AgentDefinition`/`AgentRegistry` 保存角色配置，`AgentRuntime` 保存 session/task 运行态。`TaskManager` 验证
+状态迁移、依赖和环，`SqliteAgentTaskStore` 持久化 revision、lease、attempt 与 output references。
+`MultiAgentOrchestrator` 负责受限 delegation、permission/budget inheritance、parallel scheduling、bounded
+review/replan、cancellation、handoff 和 provider isolation。每个实例拥有独立 ContextManager、pins、local
+state、tool/PTC policy 与 provider binding；History、Memory、Artifact、ToolDispatcher、PTC、Durable Jobs、
+Retrieval 与 observability 仍然共享。
+
+Handoff 只传 bounded summary、Memory IDs、Artifact handles 和 shared task state。`AgentArtifactWorkspace` 提供
+private/task/session/shared 的轻量 handle ACL。Agent 产生的 Memory proposal 一律降级为
+`assistant_inference`/`provisional`，只能进入现有 Hidden-Agent candidate pipeline，不能直接修改全局 Memory。
+Role-aware retrieval 只调整共享 MemoryRetriever 的 filters，Dynamic Tool Discovery 与 PTC 继续由运行时权限
+控制。`SqliteAgentTaskStore` 的 claim/recovery 与 Phase 13 durable worker semantics 兼容，重启后 running lease
+可恢复，completed task 不会重复执行。
+
+Phase 14 的运行边界明确为 bounded、observable、permission-aware、budget-aware、deterministic；不存在 Agent
+自创建的无限 swarm，也不引入 Phase 15。
 
 ---
 

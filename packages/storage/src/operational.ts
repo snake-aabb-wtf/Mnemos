@@ -3,11 +3,12 @@ import { join } from "node:path";
 import { SqliteArtifactStore } from "./artifact.js";
 import { SqliteDurableJobQueue } from "./job-queue.js";
 import { SqliteMigrationRunner, type SqliteMigration } from "./migrations.js";
+import type { AgentRegistry, AgentTaskStore } from "@mnemos/core";
 
 export interface DoctorCheck { name: string; status: "OK" | "WARN" | "ERROR"; detail: string; }
 export interface DoctorReport { status: "OK" | "WARN" | "ERROR"; checks: readonly DoctorCheck[]; schemaVersion: number; }
 
-export interface OperationalOptions { databasePath: string; artifactDirectory: string; migrations?: readonly SqliteMigration[]; }
+export interface OperationalOptions { databasePath: string; artifactDirectory: string; migrations?: readonly SqliteMigration[]; agents?: AgentRegistry; agentTasks?: AgentTaskStore; }
 
 export async function runDoctor(options: OperationalOptions): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [];
@@ -38,17 +39,30 @@ export async function runDoctor(options: OperationalOptions): Promise<DoctorRepo
     queue.close();
     checks.push({ name: "job-queue", status: "OK", detail: `${pending} pending jobs` });
   } catch (error) { checks.push({ name: "job-queue", status: "ERROR", detail: error instanceof Error ? error.message : "queue check failed" }); }
+  if (options.agents !== undefined) {
+    const definitions = options.agents.list({ includeDisabled: true });
+    checks.push({ name: "agent-registry", status: "OK", detail: `${definitions.length} definitions (${definitions.filter((definition) => options.agents!.get(definition.id) !== undefined).length} enabled)` });
+  }
+  if (options.agentTasks !== undefined) {
+    try {
+      const tasks = await options.agentTasks.list();
+      checks.push({ name: "agent-tasks", status: "OK", detail: `${tasks.length} persisted tasks; ${tasks.filter((task) => task.status === "blocked").length} blocked` });
+    } catch (error) { checks.push({ name: "agent-tasks", status: "ERROR", detail: error instanceof Error ? error.message : "agent task check failed" }); }
+  }
   const status = checks.some((check) => check.status === "ERROR") ? "ERROR" : checks.some((check) => check.status === "WARN") ? "WARN" : "OK";
   return { status, checks, schemaVersion };
 }
 
-export async function storageDiagnostics(options: OperationalOptions): Promise<{ databasePath: string; artifactDirectory: string; databaseBytes: number; artifactBytes: number; schemaVersion: number }> {
+export async function storageDiagnostics(options: OperationalOptions): Promise<{ databasePath: string; artifactDirectory: string; databaseBytes: number; artifactBytes: number; schemaVersion: number; agentTaskCounts?: Record<string, number> }> {
   const migrations = new SqliteMigrationRunner(options.databasePath);
   const schemaVersion = migrations.currentVersion();
   migrations.close();
   const databaseBytes = await stat(options.databasePath).then((info) => info.size).catch(() => 0);
   const artifactBytes = await directoryBytes(options.artifactDirectory);
-  return { databasePath: options.databasePath, artifactDirectory: options.artifactDirectory, databaseBytes, artifactBytes, schemaVersion };
+  if (options.agentTasks === undefined) return { databasePath: options.databasePath, artifactDirectory: options.artifactDirectory, databaseBytes, artifactBytes, schemaVersion };
+  const taskCounts: Record<string, number> = {};
+  for (const task of await options.agentTasks.list()) taskCounts[task.status] = (taskCounts[task.status] ?? 0) + 1;
+  return { databasePath: options.databasePath, artifactDirectory: options.artifactDirectory, databaseBytes, artifactBytes, schemaVersion, agentTaskCounts: taskCounts };
 }
 
 async function directoryBytes(directory: string): Promise<number> {

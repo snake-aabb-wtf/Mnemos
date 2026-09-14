@@ -9,3 +9,4 @@ export * from "./job-queue.js";
 export * from "./audit.js";
 export * from "./migrations.js";
 export * from "./operational.js";
+export * from "./agent-tasks.js";

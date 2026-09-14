@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { CompactionService, ContextManager, Harness, MockModelProvider, resolveRuntimeConfig } from "@mnemos/core";
-import { SqliteContextCompactionStore, SqliteEntityGraphStore, SqliteHistoryStore, SqliteMemoryStore, SqliteStateStore, SqliteMigrationRunner, runDoctor, storageDiagnostics } from "@mnemos/storage";
+import { AgentRegistry, CompactionService, ContextManager, Harness, MockModelProvider, createBuiltinAgentDefinitions, resolveRuntimeConfig } from "@mnemos/core";
+import { SqliteAgentTaskStore, SqliteContextCompactionStore, SqliteEntityGraphStore, SqliteHistoryStore, SqliteMemoryStore, SqliteStateStore, SqliteMigrationRunner, runDoctor, storageDiagnostics } from "@mnemos/storage";
 
 const config = resolveRuntimeConfig();
 const databasePath = config.storage.databasePath;
@@ -11,7 +11,9 @@ const sessionId = process.env.MNEMOS_SESSION_ID ?? "default";
 
 async function operationalCommand(command: string): Promise<boolean> {
   if (command === "doctor") {
-    console.log(JSON.stringify(await runDoctor({ databasePath, artifactDirectory }), null, 2));
+    const agents = new AgentRegistry(); for (const definition of createBuiltinAgentDefinitions()) agents.register(definition);
+    const agentTasks = new SqliteAgentTaskStore(databasePath);
+    try { console.log(JSON.stringify(await runDoctor({ databasePath, artifactDirectory, agents, agentTasks }), null, 2)); } finally { agentTasks.close(); }
     return true;
   }
   if (command === "migrate") {
@@ -34,7 +36,8 @@ async function operationalCommand(command: string): Promise<boolean> {
     return true;
   }
   if (command === "diagnostics") {
-    console.log(JSON.stringify(await storageDiagnostics({ databasePath, artifactDirectory }), null, 2));
+    const agentTasks = new SqliteAgentTaskStore(databasePath);
+    try { console.log(JSON.stringify(await storageDiagnostics({ databasePath, artifactDirectory, agentTasks }), null, 2)); } finally { agentTasks.close(); }
     return true;
   }
   return false;

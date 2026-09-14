@@ -67,6 +67,12 @@ jobs:
       - name: Run 10k-turn reliability soak
         run: pnpm eval:soak
 
+      - name: Run multi-agent evaluation
+        run: pnpm eval:agents
+
+      - name: Run multi-agent soak
+        run: pnpm eval:agents:soak
+
       - name: Run migration and doctor checks
         env:
           MNEMOS_DB_PATH: ${{ runner.temp }}/mnemos-ci.sqlite

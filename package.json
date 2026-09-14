@@ -19,6 +19,8 @@
     "eval:memory": "vitest run --config vitest.eval.config.ts packages/storage/src/memory-intelligence.eval.ts",
     "eval:reliability": "vitest run --config vitest.eval.config.ts packages/storage/src/reliability.eval.ts",
     "eval:soak": "vitest run --config vitest.eval.config.ts packages/storage/src/reliability-soak.eval.ts",
+    "eval:agents": "vitest run --config vitest.eval.config.ts packages/core/src/multi-agent.eval.ts",
+    "eval:agents:soak": "vitest run --config vitest.eval.config.ts packages/core/src/multi-agent-soak.eval.ts",
     "mnemos": "node apps/cli/dist/index.js",
     "mnemos:doctor": "node apps/cli/dist/index.js doctor",
     "mnemos:migrate": "node apps/cli/dist/index.js migrate",

@@ -61,6 +61,14 @@ export const runtimeConfigSchema = z.object({
     allowExternalProviders: z.boolean(),
     allowProductionSandbox: z.boolean(),
   }).strict(),
+  agents: z.object({
+    maxConcurrentAgents: positiveInt.max(128),
+    maxConcurrentAgentsPerSession: positiveInt.max(128),
+    maxDelegationDepth: nonNegativeInt.max(32),
+    maxChildTasks: nonNegativeInt.max(1_000),
+    maxReviewIterations: nonNegativeInt.max(32),
+    maxReplans: nonNegativeInt.max(32),
+  }).strict(),
 }).strict().superRefine((config, context) => {
   if (config.provider.maxBackoffMs < config.provider.baseBackoffMs) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["provider", "maxBackoffMs"], message: "maxBackoffMs must be >= baseBackoffMs" });
@@ -86,6 +94,7 @@ export const defaultRuntimeConfig: RuntimeConfig = runtimeConfigSchema.parse({
   metrics: { enabled: true },
   retention: { auditMaxRows: 100_000, auditMaxAgeDays: 30, artifactCleanupIntervalMs: 60 * 60_000, artifactMaxBytes: 0 },
   security: { allowExternalProviders: true, allowProductionSandbox: false },
+  agents: { maxConcurrentAgents: 4, maxConcurrentAgentsPerSession: 4, maxDelegationDepth: 3, maxChildTasks: 8, maxReviewIterations: 2, maxReplans: 2 },
 });
 
 export interface RuntimeConfigSources {
@@ -121,6 +130,14 @@ export function resolveRuntimeConfig(sources: RuntimeConfigSources = {}): Runtim
       leaseMs: parseInteger(environment.MNEMOS_WORKER_LEASE_MS),
     },
     ptc: { backend: environment.MNEMOS_PTC_BACKEND as RuntimeConfig["ptc"]["backend"] | undefined },
+    agents: {
+      maxConcurrentAgents: parseInteger(environment.MNEMOS_MAX_CONCURRENT_AGENTS),
+      maxConcurrentAgentsPerSession: parseInteger(environment.MNEMOS_MAX_CONCURRENT_AGENTS_PER_SESSION),
+      maxDelegationDepth: parseInteger(environment.MNEMOS_MAX_DELEGATION_DEPTH),
+      maxChildTasks: parseInteger(environment.MNEMOS_MAX_CHILD_TASKS),
+      maxReviewIterations: parseInteger(environment.MNEMOS_MAX_REVIEW_ITERATIONS),
+      maxReplans: parseInteger(environment.MNEMOS_MAX_REPLANS),
+    },
   };
   return runtimeConfigSchema.parse(deepMerge(
     defaultRuntimeConfig,

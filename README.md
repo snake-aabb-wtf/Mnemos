@@ -4,7 +4,7 @@ Mnemos is a TypeScript cognitive-harness runtime. Its architectural direction an
 
 ## Current status
 
-**Phase 13 — Production Hardening is implemented.** The project currently provides:
+**Phase 14 — Multi-Agent Extensions is implemented.** The project currently provides:
 
 - `@mnemos/core`: `Harness`, separate Visible and Hidden Agent abstractions over replaceable `ModelProvider` / `EmbeddingProvider` interfaces, Context Intelligence, Memory Intelligence, memory consolidation, hybrid retrieval / evaluation contracts, Artifact / spill contracts, and a provider-neutral Tool Runtime.
 - `@mnemos/storage`: SQLite-backed append-only `HistoryStore`, separate mutable `StateStore`, durable compaction checkpoints, SQLite/FTS5 Memory with migrations, a durable consolidation-job queue, rebuildable vector and entity-graph projections, memory-intelligence audit records, and filesystem-backed Artifacts.
@@ -13,6 +13,15 @@ Mnemos is a TypeScript cognitive-harness runtime. Its architectural direction an
 Phase 13 adds production runtime boundaries without introducing new cognitive capabilities: validated configuration,
 secret redaction, durable SQLite job leases/workers, persistent compact tool audit, provider reliability policies,
 metrics/tracing/usage abstractions, health/readiness checks, migration tooling, and safe operational diagnostics.
+
+Phase 14 adds a bounded multi-agent runtime over those shared foundations. `AgentDefinition`/`AgentRegistry` keep
+role configuration separate from runtime instances; `TaskManager` and `SqliteAgentTaskStore` persist dependency-aware
+tasks; `MultiAgentOrchestrator` enforces delegation depth, child limits, permissions, budgets, cancellation,
+parallelism, review/replan bounds, and provider isolation. Planner, Researcher, Coder, Reviewer, Visible General, and
+Hidden Memory are presets, not separate runtimes. Each instance receives an independent `ContextManager`, local state,
+tool/PTC policy, and provider binding while History, Memory, Artifact, ToolDispatcher, PTC, Durable Jobs, and
+observability remain shared. Handoffs carry bounded summaries plus Memory/Artifact references; agent conclusions enter
+the existing provisional Hidden-Agent candidate path and never directly mutate global Memory.
 
 Phase 12 adds an offline reliability campaign rather than a new production service. The runtime now ships reusable
 `SeededRandom`, `SyntheticConversationGenerator`, `FaultInjectionController`, normalized replay snapshots, and
@@ -249,6 +258,8 @@ pnpm eval:context
 pnpm eval:memory
 pnpm eval:reliability
 pnpm eval:soak
+pnpm eval:agents
+pnpm eval:agents:soak
 pnpm mnemos doctor
 pnpm mnemos migrate
 pnpm mnemos rebuild-indexes
@@ -302,10 +313,39 @@ The campaign is not a claim that every deployment concern is solved. Audit stora
 vector fallback is SQLite-based, and the available PTC container backend fails closed until an image-backed runner is
 configured. External observability, enterprise authentication, and a production sandbox fleet remain deployment work.
 
+## Multi-Agent Runtime
+
+`AgentRegistry` validates stable role definitions and only permits safe updates to descriptive fields. Authority-bearing
+permissions, tool exposure, PTC mode, context policy, and budgets are host configuration. Built-in presets are
+`planner`, `researcher`, `coder`, `reviewer`, `visible.general`, and `hidden.memory`.
+
+`AgentRuntime` instances are session/task scoped. Every instance owns an independent ContextManager, pins, context
+budget, local state map, abort signal, provider binding, and effective permissions. Shared task state uses an
+optimistic revision store. `AgentArtifactWorkspace` adds task/session/private/shared visibility over opaque Artifact
+handles; bodies remain in the shared ArtifactStore and are never copied into handoffs.
+
+`AgentTask` is a bounded state machine (`pending`, `running`, `waiting`, `completed`, `failed`, `cancelled`,
+`blocked`) with parent/dependency links, revisions, attempts, leases, and output references. `TaskManager` validates
+transitions and rejects dependency cycles. `SqliteAgentTaskStore` persists the graph and atomically claims ready work
+with lease recovery. `MultiAgentOrchestrator` schedules independent tasks in parallel, gates dependent tasks, carries
+bounded handoffs, and keeps a single user-visible root result. Fail-fast and continue-with-partial are the only failure
+policies; review loops and replans are explicitly bounded.
+
+Delegation always intersects child permissions with the parent/runtime authority and allocates a bounded child budget.
+Agent-created Memory candidates are forced to `assistant_inference`/`provisional` and must enter the existing
+Hidden-Agent consolidation pipeline. Role-aware retrieval narrows the shared `MemoryRetriever`; it does not create a
+second RAG system. `agentCanUseTool`, `invokeTool`, and `executePtc` preserve ToolDispatcher/PTC authority and usage
+budgets for each instance.
+
+`pnpm eval:agents` runs deterministic planning, parallel delegation, dependencies, handoffs, role/tool isolation, and
+memory-candidate checks. `pnpm eval:agents:soak` runs 150 roots with five children each and more than 1,000 mock agent
+invocations. No API key is required.
+
 ## Phase 13 extension points
 
 Phase 13 leaves stable boundaries for later deployment work: `DurableJobQueue`/`DurableWorker`,
 `SecretProvider`, `MetricsSink`, `Tracer`, `ProviderReliabilityExecutor`, `PtcSandboxBackend`,
 `SqliteMigrationRunner`, `RuntimeHealthService`, and the persistent `SqliteToolAuditStore`. Dynamic discovery and all
 tool authority remain behind `ToolDiscoveryIndex`, `LoadedToolSet`, and `ToolDispatcher`. Phase 14 Multi-Agent
-Extensions are not implemented.
+Extensions consume these boundaries through `AgentRegistry`, `TaskManager`, `SqliteAgentTaskStore`,
+`MultiAgentOrchestrator`, `HandoffContextBuilder`, and `AgentArtifactWorkspace`. No Phase 15 is implemented.
