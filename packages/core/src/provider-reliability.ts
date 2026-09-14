@@ -1,4 +1,5 @@
 import type { MetricsSink } from "./observability.js";
+import type { ModelProvider, ModelRequest, ModelResponse } from "./model.js";
 
 export type ProviderFailureKind = "rate_limited" | "timeout" | "transient" | "auth" | "invalid_request" | "malformed" | "unknown";
 export interface ClassifiedProviderError { kind: ProviderFailureKind; retryable: boolean; status?: number; message: string; }
@@ -138,6 +139,16 @@ export class ProviderReliabilityExecutor {
     throw new Error("Provider execution exhausted retries.");
   }
   private readonly metrics?: MetricsSink;
+}
+
+/** Optional adapter that applies the reliability policy to real ModelProvider calls. */
+export class ReliableModelProvider implements ModelProvider {
+  constructor(private readonly delegate: ModelProvider, private readonly executor: ProviderReliabilityExecutor) {}
+
+  async generate(request: ModelRequest): Promise<ModelResponse> {
+    const execution = await this.executor.execute(() => this.delegate.generate(request));
+    return execution.value;
+  }
 }
 
 function delay(milliseconds: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }

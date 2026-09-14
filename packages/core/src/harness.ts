@@ -10,6 +10,7 @@ import { contextModelInstructions } from "./context-policy.js";
 import { ptcModelInstructions, runCodeToolName, type PtcRuntime, type ToolExecutionMode } from "./ptc.js";
 import type { MetricsSink, Tracer } from "./observability.js";
 import { SessionMutex } from "./lifecycle.js";
+import { ReliableModelProvider, type ProviderReliabilityExecutor } from "./provider-reliability.js";
 
 export interface HarnessToolRuntimeOptions {
   registry: ToolRegistry;
@@ -39,6 +40,8 @@ export interface HarnessOptions {
   logger?: Logger;
   metrics?: MetricsSink;
   tracer?: Tracer;
+  /** Optional provider policy adapter; omitted for embedders that wrap the provider themselves. */
+  providerReliability?: ProviderReliabilityExecutor;
   toolRuntime?: HarnessToolRuntimeOptions;
 }
 
@@ -60,7 +63,7 @@ export class Harness {
     this.context = options.context ?? new ContextManager();
     this.events = options.events ?? new EventBus<HarnessEventMap>();
     this.context.attachEvents(this.events);
-    this.agent = new VisibleAgent(options.provider);
+    this.agent = new VisibleAgent(options.providerReliability === undefined ? options.provider : new ReliableModelProvider(options.provider, options.providerReliability));
     this.systemPrompt = options.systemPrompt ?? "";
     this.compaction = options.compaction ?? new CompactionService({
       history: options.history,
