@@ -287,7 +287,9 @@ export class CompactionService {
     let recentMessages = this.afterCheckpoint(history, checkpoint?.evictedThroughMessageId);
     const evictions: ContextEviction[] = [];
 
-    while (this.needsCompaction(sessionId, recentMessages, systemPrompt, toolSchemas)) {
+    let requested = this.options.context.consumeCompactionRequest(sessionId);
+    while (requested || this.needsCompaction(sessionId, recentMessages, systemPrompt, toolSchemas)) {
+      requested = false;
       const selection = this.selector.select(recentMessages, this.options.context.budgets.recentRawTokenBudget);
       if (!selection) break;
 

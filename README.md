@@ -4,7 +4,7 @@ Mnemos is a TypeScript cognitive-harness runtime. Its architectural direction an
 
 ## Current status
 
-**Phase 9 — Dynamic Tool Discovery is implemented.** The project currently provides:
+**Phase 10 — Context Intelligence is implemented.** The project currently provides:
 
 - `@mnemos/core`: `Harness`, separate Visible and Hidden Agent abstractions over replaceable `ModelProvider` / `EmbeddingProvider` interfaces, context accounting, memory consolidation, hybrid retrieval / evaluation contracts, Artifact / spill contracts, and a provider-neutral Tool Runtime.
 - `@mnemos/storage`: SQLite-backed append-only `HistoryStore`, separate mutable `StateStore`, durable compaction checkpoints, SQLite/FTS5 Memory, a durable consolidation-job queue, a rebuildable local vector index, and SQLite metadata plus filesystem-backed Artifacts.
@@ -126,6 +126,7 @@ The initial cognitive tool set is:
 - `memory.search`, `memory.get`, `memory.source`, `memory.timeline`, `memory.remember`
 - `history.search`, `history.get`
 - `context.inspect`, `context.pin`, `context.unpin`
+- `context.request_compaction`
 - `state.get`, `state.set`, `state.patch`
 - `artifact.get`, `artifact.read`, `artifact.query`, `artifact.create`, `artifact.delete`
 
@@ -188,6 +189,23 @@ Discovery state is process-local and session-scoped. Search/describe outputs and
 
 Phase 9 intentionally remains lexical and local. It does not add semantic embeddings, MCP, `tools.describe`-style dynamic external connectors, browser/shell access, or a production distributed sandbox. Those are later roadmap work (including the Phase 13 production PTC backend).
 
+## Context Intelligence
+
+Phase 10 adds runtime-owned context telemetry and deterministic policy decisions. `ContextStats` now reports physical availability separately from `safeHeadroomTokens` after the mandatory `generationReserveTokens`. It includes system, pinned, recent raw, retrieved-memory, tool-result, artifact-handle, and tool-schema accounting plus a stable pressure level: `NORMAL`, `ELEVATED`, `HIGH`, `COMPACTION`, or `EMERGENCY`.
+
+`ContextPolicyEngine` applies configurable thresholds and session-scoped hysteresis. It emits typed recommendations such as `prefer_ptc`, `prefer_artifact`, `limit_memory_retrieval`, `avoid_loading_more_tools`, and `request_compaction`; recommendations do not grant the model ContextManager authority. At `EMERGENCY`, Harness preflight is enforced: it attempts safe compaction and refuses to invoke the provider unless `usedTokens + generationReserveTokens <= contextLimit`.
+
+The cognitive context tools are bounded runtime capabilities:
+
+- `context.inspect` returns only the current session's safe telemetry, pins, visible message IDs, and policy decision.
+- `context.pin` creates a `visible-agent` pin with an independent budget, normalized-content dedupe, optional turn TTL, and restricted priority.
+- `context.unpin` can remove only the caller's own agent pins; system and automatic-compaction pins are protected.
+- `context.request_compaction` requests a safe runtime action; the agent cannot choose a cutoff or delete History.
+
+Memory retrieval is packed against the policy's effective retrieval-token budget. Phase 9 dynamic schema sets can be reduced under pressure, while core tools remain available. Artifact handles and PTC final results continue to use the Phase 6/8 spill paths. Canonical History remains untouched, and semantic boundaries still protect tool transactions during compaction.
+
+The current policy is deterministic and process-local. It does not implement adaptive learned routing, wall-clock pin expiry, semantic pin dedupe, or a separate Hidden Agent context policy; those remain future work.
+
 ## Requirements
 
 - Node.js 22+
@@ -203,11 +221,12 @@ pnpm test
 pnpm eval:retrieval
 pnpm eval:ptc
 pnpm eval:tools
+pnpm eval:context
 pnpm chat
 ```
 
 `pnpm chat` stores data in `./mnemos.sqlite` by default. Set `MNEMOS_DB_PATH` and `MNEMOS_SESSION_ID` to choose the database location and conversation session. The CLI intentionally remains a minimal mock chat host; embedders enable the native tool loop by supplying `ToolRegistry`, `ToolDispatcher`, and host-granted permissions to `Harness`.
 
-## Phase 10 extension points
+## Phase 11 extension points
 
 Dynamic discovery leaves the following stable boundaries for the next phase: `ToolDiscoveryIndex.search`, `ToolDiscoveryRuntime.describe`, `LoadedToolSet` snapshots and lifecycle, schema hashes, `PtcSdkGenerator.describe(allowedToolNames)`, and the existing `ToolDispatcher` permission gate. Semantic discovery, provider-backed ranking, or remote catalog adapters can be added behind these contracts without exposing implementations or changing native/PTC execution semantics. `MemoryVectorStore`, `EmbeddingProvider`, and `MemoryReranker` remain independently replaceable for future retrieval scale.

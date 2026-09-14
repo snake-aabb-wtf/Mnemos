@@ -1,4 +1,5 @@
 export * from "./context.js";
+export * from "./context-policy.js";
 export * from "./artifact.js";
 export * from "./tool.js";
 export * from "./tool-discovery.js";

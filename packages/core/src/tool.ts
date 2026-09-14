@@ -8,7 +8,7 @@ import type { ModelToolDeclaration } from "./model.js";
  * remain namespaced, which keeps the Registry's normal ownership boundary
  * intact while giving providers a stable, conventional PTC entry point.
  */
-const toolNamePattern = /^(?:run_code|[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+)$/;
+const toolNamePattern = /^(?:run_code|[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+)$/;
 const toolPermissionPattern = /^[a-z][a-z0-9-]*:(?:read|write|delete|execute)$/;
 
 export const toolNameSchema = z.string().regex(toolNamePattern, "Tool names must use a stable dotted namespace (except run_code)");

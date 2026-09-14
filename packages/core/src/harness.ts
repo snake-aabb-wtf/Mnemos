@@ -6,6 +6,7 @@ import { EventBus, type HarnessEventMap } from "./events.js";
 import { VisibleAgent, type ModelProvider, type ModelToolCall } from "./model.js";
 import { ToolDispatcher, ToolRegistry, type ToolDispatchContext, type ToolPermission } from "./tool.js";
 import { type ToolDiscoveryRuntime } from "./tool-discovery.js";
+import { contextModelInstructions } from "./context-policy.js";
 import { ptcModelInstructions, runCodeToolName, type PtcRuntime, type ToolExecutionMode } from "./ptc.js";
 
 export interface HarnessToolRuntimeOptions {
@@ -51,6 +52,7 @@ export class Harness {
   constructor(private readonly options: HarnessOptions) {
     this.context = options.context ?? new ContextManager();
     this.events = options.events ?? new EventBus<HarnessEventMap>();
+    this.context.attachEvents(this.events);
     this.agent = new VisibleAgent(options.provider);
     this.systemPrompt = options.systemPrompt ?? "";
     this.compaction = options.compaction ?? new CompactionService({
@@ -82,15 +84,17 @@ export class Harness {
   }
 
   async send(sessionId: string, content: string): Promise<HistoryMessage> {
+    this.context.advanceTurn(sessionId);
     const received = await this.options.history.append({ sessionId, role: "user", content });
     await this.events.emit("message.received", { message: received });
     const beforeResponse = await this.prepareContext(sessionId);
     await this.emitEvictions(beforeResponse);
-    await this.emitContextEvents(sessionId, beforeResponse.context.stats);
 
     let prepared = beforeResponse;
     let toolIterations = 0;
     while (true) {
+      const preflight = await this.preflightContext(sessionId, prepared);
+      if (!preflight.safe) return this.appendAssistant(sessionId, "Context limit reached; the runtime could not safely reduce the working context before model invocation.");
       const response = await this.agent.respond({
         sessionId,
         input: content,
@@ -118,7 +122,6 @@ export class Harness {
       toolIterations += 1;
       prepared = await this.prepareContext(sessionId);
       await this.emitEvictions(prepared);
-      await this.emitContextEvents(sessionId, prepared.context.stats);
     }
   }
 
@@ -135,7 +138,27 @@ export class Harness {
   }
 
   private async prepareContext(sessionId: string): Promise<CompactionPreparation> {
-    return this.compaction.prepare(sessionId, this.systemPrompt, this.toolSchemaTexts(sessionId));
+    const toolSchemas = this.toolSchemaTexts(sessionId);
+    this.context.setSessionToolSchemas(sessionId, toolSchemas);
+    this.context.setSessionSystemPrompt(sessionId, this.systemPrompt);
+    return this.compaction.prepare(sessionId, this.systemPrompt, toolSchemas);
+  }
+
+  private async preflightContext(sessionId: string, preparation: CompactionPreparation): Promise<{ safe: boolean }> {
+    const stats = preparation.context.stats;
+    const decision = this.context.policyDecision(sessionId, stats, {
+      loadedDynamicTools: this.toolRuntime?.discovery?.snapshot(sessionId, this.toolRuntime.grantedPermissions).dynamicNames.length,
+    });
+    if (this.toolRuntime?.discovery) {
+      const unloaded = this.toolRuntime.discovery.applyContextPolicy(sessionId, decision.effectiveToolSchemaBudget);
+      await this.toolRuntime.discovery.emitUnloaded(sessionId, this.toolRuntime.agentId, unloaded, "budget");
+    }
+    await this.emitContextEvents(sessionId, stats, decision);
+    if (this.context.isSafeForModel(preparation.context)) return { safe: true };
+    const reduced = await this.prepareContext(sessionId);
+    await this.emitEvictions(reduced);
+    await this.emitContextEvents(sessionId, reduced.context.stats, this.context.policyDecision(sessionId, reduced.context.stats));
+    return { safe: this.context.isSafeForModel(reduced.context) };
   }
 
   private async executeToolCalls(sessionId: string, calls: readonly ModelToolCall[]): Promise<void> {
@@ -207,8 +230,11 @@ export class Harness {
   }
 
   private runtimeInstructions(sessionId: string): readonly string[] {
-    if (!this.toolRuntime || this.toolRuntime.executionMode === "native" || this.toolRuntime.ptc === undefined) return [];
-    return ptcModelInstructions(this.toolRuntime.ptc.sdkDescription(this.dispatchableToolNames(sessionId)));
+    if (!this.toolRuntime) return [];
+    const instructions: string[] = [];
+    if (this.toolRuntime.executionMode !== "native" && this.toolRuntime.ptc !== undefined) instructions.push(...ptcModelInstructions(this.toolRuntime.ptc.sdkDescription(this.dispatchableToolNames(sessionId))));
+    instructions.push(...contextModelInstructions());
+    return instructions;
   }
 
   private historyToolCallContent(call: ModelToolCall): string {
@@ -230,11 +256,17 @@ export class Harness {
     for (const eviction of preparation.evictions) await this.events.emit("context.evicted", eviction);
   }
 
-  private async emitContextEvents(sessionId: string, stats: ContextStats): Promise<void> {
+  private readonly lastPressureLevels = new Map<string, ContextStats["pressureLevel"]>();
+
+  private async emitContextEvents(sessionId: string, stats: ContextStats, decision = this.context.policyDecision(sessionId, stats)): Promise<void> {
     await this.events.emit("context.pressure", { sessionId, stats });
-    if (stats.pressure >= this.context.budgets.emergencyPressureThreshold) {
+    const previous = this.lastPressureLevels.get(sessionId);
+    if (previous !== stats.pressureLevel) await this.events.emit("context.pressure.changed", { sessionId, previous, stats });
+    this.lastPressureLevels.set(sessionId, stats.pressureLevel);
+    await this.events.emit("context.policy.applied", { sessionId, decision, enforced: decision.enforced });
+    if (stats.pressureLevel === "EMERGENCY") {
       await this.events.emit("context.compaction.requested", { sessionId, stats, reason: "emergency" });
-    } else if (stats.pressure >= this.context.budgets.highPressureThreshold) {
+    } else if (stats.pressureLevel === "HIGH" || stats.pressureLevel === "COMPACTION") {
       await this.events.emit("context.compaction.requested", { sessionId, stats, reason: "high" });
     }
   }

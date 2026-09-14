@@ -15,7 +15,7 @@ import {
 } from "./tool.js";
 
 export const defaultCoreToolNames: readonly ToolName[] = [
-  "run_code", "tools.search", "tools.describe", "context.inspect", "memory.search",
+  "run_code", "tools.search", "tools.describe", "context.inspect", "context.pin", "context.unpin", "context.request_compaction", "memory.search",
 ];
 
 export interface ToolExposurePolicy {
@@ -225,8 +225,9 @@ interface LoadedEntry { lastUsed: number; schemaTokens: number; }
 export class LoadedToolSet {
   private readonly dynamic = new Map<ToolName, LoadedEntry>();
   private clock = 0;
+  private schemaBudget: number;
 
-  constructor(private readonly registry: ToolRegistry, private readonly policy: ToolExposurePolicy, private readonly coreNames: readonly ToolName[]) {}
+  constructor(private readonly registry: ToolRegistry, private readonly policy: ToolExposurePolicy, private readonly coreNames: readonly ToolName[]) { this.schemaBudget = policy.toolSchemaTokenBudget; }
 
   snapshot(grants: readonly ToolPermission[]): LoadedToolSnapshot {
     for (const name of this.dynamic.keys()) {
@@ -264,12 +265,12 @@ export class LoadedToolSet {
       if (!permitted(metadata, grants)) { rejected.push({ name, error: "permission_denied" }); continue; }
       if (this.coreNames.includes(name)) { loadedNames.push(name); continue; }
       const schemaTokens = estimateSchemaTokens(descriptor);
-      if (schemaTokens > this.policy.toolSchemaTokenBudget) { rejected.push({ name, error: "schema_budget_exceeded" }); continue; }
+      if (schemaTokens > this.schemaBudget) { rejected.push({ name, error: "schema_budget_exceeded" }); continue; }
       this.dynamic.set(name, { schemaTokens, lastUsed: ++this.clock });
       while (this.dynamic.size > this.policy.maxLoadedDynamicTools) this.evictOldest();
-      while (this.currentDynamicTokens() > this.policy.toolSchemaTokenBudget && this.dynamic.size > 1) this.evictOldest(name);
+      while (this.currentDynamicTokens() > this.schemaBudget && this.dynamic.size > 1) this.evictOldest(name);
       if (!this.dynamic.has(name)) rejected.push({ name, error: "max_loaded_dynamic_tools" });
-      else if (this.currentDynamicTokens() > this.policy.toolSchemaTokenBudget) { this.dynamic.delete(name); rejected.push({ name, error: "schema_budget_exceeded" }); }
+      else if (this.currentDynamicTokens() > this.schemaBudget) { this.dynamic.delete(name); rejected.push({ name, error: "schema_budget_exceeded" }); }
       else loadedNames.push(name);
     }
     return { loadedNames, rejected };
@@ -279,6 +280,18 @@ export class LoadedToolSet {
     for (const name of names) {
       if (!this.coreNames.includes(name)) this.dynamic.delete(name);
     }
+  }
+
+  setSchemaBudget(budget: number): readonly ToolName[] {
+    this.schemaBudget = Math.max(1, budget);
+    const removed: ToolName[] = [];
+    while (this.currentDynamicTokens() > budget && this.dynamic.size > 0) {
+      const candidate = [...this.dynamic.entries()].sort((left, right) => left[1].lastUsed - right[1].lastUsed || left[0].localeCompare(right[0]))[0];
+      if (!candidate) break;
+      this.dynamic.delete(candidate[0]);
+      removed.push(candidate[0]);
+    }
+    return removed;
   }
 
   private currentDynamicTokens(): number { return [...this.dynamic.values()].reduce((sum, item) => sum + item.schemaTokens, 0); }
@@ -340,6 +353,10 @@ export class ToolDiscoveryRuntime {
     return this.snapshot(sessionId, grants).names;
   }
 
+  applyContextPolicy(sessionId: string, effectiveToolSchemaBudget: number): readonly ToolName[] {
+    return this.loadedSet(sessionId).setSchemaBudget(effectiveToolSchemaBudget);
+  }
+
   search(input: ToolDiscoverySearchInput, grants: readonly ToolPermission[]): ToolDiscoverySearchResult {
     const limit = Math.min(input.limit ?? this.policy.maxSearchResults, this.policy.maxSearchResults);
     const all = this.index.search({ ...input, includeUnavailable: input.includeUnavailable ?? true }, grants, limit);
@@ -388,6 +405,10 @@ export class ToolDiscoveryRuntime {
     await this.options.events?.emit("tool.discovery.described", { sessionId, agentId, names: [...names], loadedNames: [...result.loadedNames], schemaTokenEstimate, durationMs });
     if (result.loadedNames.length > 0) await this.options.events?.emit("tool.loaded", { sessionId, agentId, toolNames: [...result.loadedNames], schemaTokenEstimate });
     if (result.unloadedNames.length > 0) await this.options.events?.emit("tool.unloaded", { sessionId, agentId, toolNames: [...result.unloadedNames], reason: "lru" });
+  }
+
+  async emitUnloaded(sessionId: string, agentId: string, toolNames: readonly ToolName[], reason: "lru" | "budget" | "registry" = "budget"): Promise<void> {
+    if (toolNames.length > 0) await this.options.events?.emit("tool.unloaded", { sessionId, agentId, toolNames: [...toolNames], reason });
   }
 }
 

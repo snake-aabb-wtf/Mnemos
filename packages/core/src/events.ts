@@ -1,4 +1,5 @@
 import type { ContextStats } from "./context.js";
+import type { ContextPolicyDecision } from "./context-policy.js";
 import type { ContextEviction } from "./compaction.js";
 import type { ConsolidationJob, ConsolidationResult } from "./consolidation.js";
 import type { HistoryMessage } from "./contracts.js";
@@ -10,6 +11,11 @@ export interface HarnessEventMap {
   "message.received": { message: HistoryMessage };
   "message.generated": { message: HistoryMessage };
   "context.pressure": { sessionId: string; stats: ContextStats };
+  "context.pressure.changed": { sessionId: string; previous: ContextStats["pressureLevel"] | undefined; stats: ContextStats };
+  "context.policy.applied": { sessionId: string; decision: ContextPolicyDecision; enforced: boolean };
+  "context.pin.created": { sessionId?: string; pinId: string; source: "system" | "automatic" | "visible-agent"; tokenEstimate: number };
+  "context.pin.removed": { sessionId?: string; pinId: string; source: "system" | "automatic" | "visible-agent"; reason: "explicit" | "expired" | "replaced" };
+  "context.pin.expired": { sessionId: string; pinId: string };
   "context.compaction.requested": {
     sessionId: string;
     stats: ContextStats;

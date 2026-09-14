@@ -2,6 +2,7 @@ import { z } from "zod";
 import { describe, expect, it } from "vitest";
 import {
   ContextManager,
+  contextModelInstructions,
   EventBus,
   Harness,
   MockModelProvider,
@@ -121,7 +122,8 @@ describe("Phase 9 dynamic tool discovery", () => {
     expect(toolsSeen[1]).toEqual(["context.inspect", "tools.describe", "tools.search"]);
     expect(toolsSeen[2]).toContain("reports.fetch");
     expect(toolsSeen[2]).not.toContain("run_code");
-    const fullSchemaTokens = registry.nativeDeclarations().reduce((sum, declaration) => sum + Math.ceil(Buffer.byteLength(JSON.stringify(declaration)) / 4), 0);
+    const fullSchemaTokens = registry.nativeDeclarations().reduce((sum, declaration) => sum + Math.ceil(Buffer.byteLength(JSON.stringify(declaration)) / 4), 0)
+      + contextModelInstructions().reduce((sum, instruction) => sum + Math.ceil(Buffer.byteLength(instruction) / 4), 0);
     expect(schemaTokensSeen[0]).toBeLessThan(fullSchemaTokens);
   });
 

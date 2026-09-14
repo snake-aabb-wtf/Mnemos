@@ -1594,6 +1594,16 @@ compaction request
 
 研究自动 Context Policy。
 
+Phase 10 为 Visible Agent 增加 runtime-owned Context Intelligence，而不是把 `ContextManager` 权限交给模型。`ContextStats` 必须同时报告物理可用空间和扣除 generation reserve 后的 safe headroom；pressure 使用 `NORMAL`、`ELEVATED`、`HIGH`、`COMPACTION`、`EMERGENCY` 五级配置阈值，并通过 session-scoped hysteresis 防止阈值附近反复抖动。
+
+`ContextPolicyEngine` 输出 typed recommendations 和 effective budgets。Recommendation（例如 `prefer_ptc`、`prefer_artifact`、`limit_memory_retrieval`、`unload_unused_dynamic_tools`）与 enforcement 分离；当 preflight 仍无法满足 `usedTokens + generationReserveTokens <= contextLimit` 时，Harness 不得调用 ModelProvider，而应先尝试安全 compaction，最终返回明确 runtime error。
+
+`context.inspect` 只暴露当前 session 的计量快照和 runtime policy；`context.pin` 只能创建有 budget、去重、turn-TTL 的 `visible-agent` pin，`context.unpin` 不能移除 system 或 automatic pin。Pinned Context 继续区分 system、automatic、visible-agent，且不改变 canonical History。`context.request_compaction` 只是受 cooldown/meaningful-range 约束的安全请求。
+
+Retrieval、tool schema、tool result 和 Artifact handle 均必须计入 visible context accounting。高压力时 policy 可降低 retrieval/schema/result effective budgets、卸载未使用 dynamic tools，并建议 PTC/Artifact；所有 reduction 都不能删除 canonical History 或拆开 tool transaction。`context.pressure.changed`、`context.policy.applied`、`context.pin.*` 只在有意义的状态转换时产生，禁止 token 级事件风暴。
+
+Phase 10 不实现 memory decay、entity graph、confidence evolution 或新的 Hidden Agent cognition；这些仍属于 Phase 11。
+
 ---
 
 # Phase 11 — Memory Intelligence

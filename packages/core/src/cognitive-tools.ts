@@ -35,6 +35,7 @@ const historySearchInputSchema = z.object({
 const historyGetInputSchema = z.object({ messageId: memoryIdSchema }).strict();
 const contextPinInputSchema = z.object({ id: identifierSchema, content: z.string().min(1).max(64_000) }).strict();
 const contextUnpinInputSchema = z.object({ id: identifierSchema }).strict();
+const contextRequestCompactionInputSchema = z.object({ reason: z.string().trim().max(512).optional() }).strict();
 const stateSetInputSchema = z.object({ state: recordSchema }).strict();
 const statePatchInputSchema = z.object({ patch: recordSchema }).strict();
 const artifactGetInputSchema = z.object({ id: artifactIdSchema }).strict();
@@ -78,8 +79,12 @@ export function createCognitiveTools(dependencies: CognitiveToolDependencies): r
     description: "Retrieve ranked long-term memories using the configured hybrid retriever.",
     inputSchema: memoryRetrievalQuerySchema,
     requiredPermissions: ["memory:read"], sideEffect: "read", concurrencySafe: true,
-    async execute(input: z.input<typeof memoryRetrievalQuerySchema>) {
-      return dependencies.retriever.retrieve(input);
+    async execute(input: z.input<typeof memoryRetrievalQuerySchema>, context) {
+      const results = await dependencies.retriever.retrieve(input);
+      const history = await dependencies.history.list(context.sessionId);
+      const base = dependencies.context.build(history, "", context.sessionId);
+      const budget = dependencies.context.effectiveRetrievalTokenBudget(context.sessionId, dependencies.context.buildVisible(context.sessionId, base.recentMessages, "", [], dependencies.context.getSessionToolSchemas(context.sessionId)).stats);
+      return dependencies.context.packWithinTokenBudget(results, budget).items;
     },
   });
   const memoryGet = defineTool({
@@ -148,10 +153,12 @@ export function createCognitiveTools(dependencies: CognitiveToolDependencies): r
     requiredPermissions: ["context:read"], sideEffect: "read", concurrencySafe: true,
     async execute(_: Record<string, never>, context) {
       const history = await dependencies.history.list(context.sessionId);
-      const visible = dependencies.context.build(history, "", context.sessionId);
+      const base = dependencies.context.build(history, dependencies.context.getSessionSystemPrompt(context.sessionId), context.sessionId);
+      const visible = dependencies.context.buildVisible(context.sessionId, base.recentMessages, dependencies.context.getSessionSystemPrompt(context.sessionId), [], dependencies.context.getSessionToolSchemas(context.sessionId));
       return {
         budgets: dependencies.context.budgets,
         stats: visible.stats,
+        policy: dependencies.context.policyDecision(context.sessionId, visible.stats),
         pins: dependencies.context.listPins(context.sessionId),
         recentMessageIds: visible.recentMessages.map((message) => message.id),
       };
@@ -160,10 +167,17 @@ export function createCognitiveTools(dependencies: CognitiveToolDependencies): r
   const contextPin = defineTool({
     name: "context.pin",
     description: "Create or replace a session-scoped Visible Agent pin subject to the configured pin budget.",
-    inputSchema: contextPinInputSchema,
+    inputSchema: contextPinInputSchema.extend({
+      ttlTurns: z.number().int().positive().max(100).optional(),
+      priority: z.enum(["normal", "low"]).optional(),
+    }),
     requiredPermissions: ["context:write"], sideEffect: "write", concurrencySafe: false,
-    async execute(input: z.infer<typeof contextPinInputSchema>, context) {
-      const pin: PinnedContext = { id: input.id, content: input.content, source: "visible-agent", sessionId: context.sessionId };
+    async execute(input: z.infer<typeof contextPinInputSchema> & { ttlTurns?: number; priority?: "normal" | "low" }, context) {
+      const pin: PinnedContext = {
+        id: input.id, content: input.content, source: "visible-agent", sessionId: context.sessionId,
+        ...(input.priority === undefined ? {} : { priority: input.priority }),
+        ...(input.ttlTurns === undefined ? {} : { expiresAtTurn: dependencies.context.currentTurn(context.sessionId) + input.ttlTurns }),
+      };
       const previous = dependencies.context.upsertPin(pin);
       return { pin, ...(previous === undefined ? {} : { replacedPinId: previous.id }) };
     },
@@ -174,7 +188,17 @@ export function createCognitiveTools(dependencies: CognitiveToolDependencies): r
     inputSchema: contextUnpinInputSchema,
     requiredPermissions: ["context:write"], sideEffect: "write", concurrencySafe: false,
     async execute(input: z.infer<typeof contextUnpinInputSchema>, context) {
-      return { removed: dependencies.context.removePin(input.id, context.sessionId) };
+      return { removed: dependencies.context.removeAgentPin(input.id, context.sessionId) };
+    },
+  });
+  const contextRequestCompaction = defineTool({
+    name: "context.request_compaction",
+    description: "Request a safe runtime compaction before the next model invocation.",
+    inputSchema: contextRequestCompactionInputSchema,
+    requiredPermissions: ["context:write"], sideEffect: "write", concurrencySafe: false,
+    async execute(input: z.infer<typeof contextRequestCompactionInputSchema>, context) {
+      dependencies.context.requestCompaction(context.sessionId);
+      return { requested: true, reason: input.reason };
     },
   });
 
@@ -277,7 +301,7 @@ export function createCognitiveTools(dependencies: CognitiveToolDependencies): r
   return [
     memorySearch, memoryGet, memorySource, memoryTimeline, memoryRemember,
     historySearch, historyGet,
-    contextInspect, contextPin, contextUnpin,
+    contextInspect, contextPin, contextUnpin, contextRequestCompaction,
     stateGet, stateSet, statePatch,
     artifactGet, artifactRead, artifactQuery, artifactCreate, artifactDelete,
   ];

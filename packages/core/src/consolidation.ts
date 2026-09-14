@@ -296,6 +296,8 @@ export class ModelProviderHiddenAgent implements HiddenAgent {
       stats: {
         usedTokens,
         contextLimit: this.config.contextLimit,
+        availableTokens: Math.max(0, this.config.contextLimit - usedTokens),
+        safeHeadroomTokens: Math.max(0, this.config.contextLimit - usedTokens),
         systemTokens: 0,
         pinnedTokens: 0,
         recentRawTokens: usedTokens,
@@ -304,7 +306,9 @@ export class ModelProviderHiddenAgent implements HiddenAgent {
         retrievedMemoryTokens: 0,
         toolResultTokens: 0,
         reservedTokens: 0,
+        generationReserveTokens: 0,
         pressure: usedTokens / this.config.contextLimit,
+        pressureLevel: "NORMAL",
       },
     };
   }
