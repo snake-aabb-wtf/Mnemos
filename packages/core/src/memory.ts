@@ -19,6 +19,34 @@ export type MemoryStatus = z.infer<typeof memoryStatusSchema>;
 export const memoryIdSchema = z.string().uuid();
 const nonEmptyTextSchema = z.string().trim().min(1);
 
+export const memoryDurabilitySchema = z.enum(["durable", "normal", "ephemeral"]);
+export type MemoryDurability = z.infer<typeof memoryDurabilitySchema>;
+
+export const memoryScopeKindSchema = z.enum(["global", "user", "project", "session", "entity"]);
+export const memoryScopeSchema = z.object({
+  kind: memoryScopeKindSchema,
+  id: nonEmptyTextSchema,
+}).default({ kind: "global", id: "global" });
+export type MemoryScope = z.infer<typeof memoryScopeSchema>;
+
+export const memoryEntityRelationTypeSchema = z.enum([
+  "uses",
+  "belongs_to",
+  "depends_on",
+  "related_to",
+  "supersedes",
+  "part_of",
+  "runs_on",
+]);
+export type MemoryEntityRelationType = z.infer<typeof memoryEntityRelationTypeSchema>;
+
+export const memoryEntityRelationSchema = z.object({
+  from: nonEmptyTextSchema,
+  relation: memoryEntityRelationTypeSchema,
+  to: nonEmptyTextSchema,
+}).strict();
+export type MemoryEntityRelation = z.infer<typeof memoryEntityRelationSchema>;
+
 /** A stable History address. Session ID is required because HistoryStore is session-scoped. */
 export const memorySourceReferenceSchema = z.object({
   sessionId: nonEmptyTextSchema,
@@ -46,6 +74,16 @@ export const memoryRecordSchema = z.object({
   sourceType: memorySourceTypeSchema,
   status: memoryStatusSchema,
   supersededBy: memoryIdSchema.optional(),
+  mergedInto: memoryIdSchema.optional(),
+  derivedFromMemoryIds: z.array(memoryIdSchema).default([]),
+  confirmationCount: z.number().int().nonnegative().default(1),
+  reinforcementScore: z.number().min(0).max(1).default(0),
+  lastReinforcedAt: z.string().datetime().optional(),
+  stale: z.boolean().default(false),
+  staleSince: z.string().datetime().optional(),
+  durability: memoryDurabilitySchema.default("normal"),
+  scope: memoryScopeSchema,
+  entityRelations: z.array(memoryEntityRelationSchema).default([]),
   entities: metadataValuesSchema,
   tags: metadataValuesSchema,
 }).superRefine((record, context) => {
@@ -58,6 +96,12 @@ export const memoryRecordSchema = z.object({
   }
   if (record.status !== "superseded" && record.supersededBy !== undefined) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "Only superseded memory may have supersededBy" });
+  }
+  if (record.mergedInto === record.id) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Memory cannot be merged into itself" });
+  }
+  if (record.status !== "archived" && record.mergedInto !== undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Only archived Memory may have mergedInto" });
   }
 });
 export type MemoryRecord = z.infer<typeof memoryRecordSchema>;
@@ -76,6 +120,16 @@ export const memoryCreateInputSchema = z.object({
   confidence: z.number().min(0).max(1),
   sourceType: memorySourceTypeSchema,
   status: z.enum(["active", "provisional", "archived"]).default("provisional"),
+  mergedInto: memoryIdSchema.optional(),
+  derivedFromMemoryIds: z.array(memoryIdSchema).default([]),
+  confirmationCount: z.number().int().nonnegative().default(1),
+  reinforcementScore: z.number().min(0).max(1).default(0),
+  lastReinforcedAt: z.string().datetime().optional(),
+  stale: z.boolean().default(false),
+  staleSince: z.string().datetime().optional(),
+  durability: memoryDurabilitySchema.default("normal"),
+  scope: memoryScopeSchema,
+  entityRelations: z.array(memoryEntityRelationSchema).default([]),
   entities: metadataValuesSchema,
   tags: metadataValuesSchema,
 });
@@ -94,6 +148,16 @@ export const memoryUpdateInputSchema = z.object({
   sourceType: memorySourceTypeSchema.optional(),
   /** Superseded status is only assigned by the atomic supersede operation. */
   status: z.enum(["active", "provisional", "archived"]).optional(),
+  mergedInto: memoryIdSchema.nullable().optional(),
+  derivedFromMemoryIds: z.array(memoryIdSchema).optional(),
+  confirmationCount: z.number().int().nonnegative().optional(),
+  reinforcementScore: z.number().min(0).max(1).optional(),
+  lastReinforcedAt: z.string().datetime().nullable().optional(),
+  stale: z.boolean().optional(),
+  staleSince: z.string().datetime().nullable().optional(),
+  durability: memoryDurabilitySchema.optional(),
+  scope: memoryScopeSchema.optional(),
+  entityRelations: z.array(memoryEntityRelationSchema).optional(),
   entities: metadataValuesSchema.optional(),
   tags: metadataValuesSchema.optional(),
 }).refine((input) => Object.keys(input).length > 0, "Memory update cannot be empty");
@@ -111,6 +175,8 @@ export const memorySearchQuerySchema = z.object({
   after: z.string().datetime().optional(),
   /** Restricts results to memories with at least one source in this session. */
   sessionId: nonEmptyTextSchema.optional(),
+  scopeKind: memoryScopeKindSchema.optional(),
+  scopeId: nonEmptyTextSchema.optional(),
   limit: z.number().int().min(1).max(100).default(10),
 }).refine((query) => query.before === undefined || query.after === undefined || query.before >= query.after, "before must be at or after after");
 export type MemorySearchQuery = z.input<typeof memorySearchQuerySchema>;
@@ -125,6 +191,8 @@ export const memoryListQuerySchema = z.object({
   before: z.string().datetime().optional(),
   after: z.string().datetime().optional(),
   sessionId: nonEmptyTextSchema.optional(),
+  scopeKind: memoryScopeKindSchema.optional(),
+  scopeId: nonEmptyTextSchema.optional(),
   /** Rebuilds may read more than the interactive default, but callers must opt in. */
   limit: z.number().int().min(1).max(20_000).default(100),
 }).refine((query) => query.before === undefined || query.after === undefined || query.before >= query.after, "before must be at or after after");

@@ -57,3 +57,6 @@ jobs:
 
       - name: Run context intelligence evaluation
         run: pnpm eval:context
+
+      - name: Run memory intelligence evaluation
+        run: pnpm eval:memory

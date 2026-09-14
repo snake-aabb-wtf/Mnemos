@@ -25,6 +25,8 @@ interface StoredVector {
   entities_json: string;
   tags_json: string;
   session_ids_json: string;
+  scope_kind: MemoryVectorRecord["scopeKind"];
+  scope_id: string;
   indexed_at: string;
 }
 
@@ -53,11 +55,17 @@ function migrateVectors(db: Database.Database): void {
       entities_json TEXT NOT NULL,
       tags_json TEXT NOT NULL,
       session_ids_json TEXT NOT NULL,
+      scope_kind TEXT NOT NULL DEFAULT 'global',
+      scope_id TEXT NOT NULL DEFAULT 'global',
       indexed_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_memory_vectors_model ON memory_vectors (model, model_version, dimensions);
     CREATE INDEX IF NOT EXISTS idx_memory_vectors_current ON memory_vectors (status, type, source_type, confidence, created_at);
   `);
+  const columns = db.prepare("PRAGMA table_info(memory_vectors)").all() as Array<{ name: string }>;
+  const existing = new Set(columns.map((column) => column.name));
+  if (!existing.has("scope_kind")) db.exec("ALTER TABLE memory_vectors ADD COLUMN scope_kind TEXT NOT NULL DEFAULT 'global'");
+  if (!existing.has("scope_id")) db.exec("ALTER TABLE memory_vectors ADD COLUMN scope_id TEXT NOT NULL DEFAULT 'global'");
 }
 
 /**
@@ -122,8 +130,8 @@ export class SqliteMemoryVectorStore implements MemoryVectorStore {
       INSERT INTO memory_vectors (
         memory_id, values_json, dimensions, model, model_version, content_hash,
         type, status, source_type, confidence, created_at, updated_at,
-        entities_json, tags_json, session_ids_json, indexed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        entities_json, tags_json, session_ids_json, scope_kind, scope_id, indexed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(memory_id) DO UPDATE SET
         values_json = excluded.values_json,
         dimensions = excluded.dimensions,
@@ -139,6 +147,8 @@ export class SqliteMemoryVectorStore implements MemoryVectorStore {
         entities_json = excluded.entities_json,
         tags_json = excluded.tags_json,
         session_ids_json = excluded.session_ids_json,
+        scope_kind = excluded.scope_kind,
+        scope_id = excluded.scope_id,
         indexed_at = excluded.indexed_at
     `).run(
       parsed.memoryId,
@@ -156,6 +166,8 @@ export class SqliteMemoryVectorStore implements MemoryVectorStore {
       JSON.stringify(parsed.entities),
       JSON.stringify(parsed.tags),
       JSON.stringify(parsed.sessionIds),
+      parsed.scopeKind ?? "global",
+      parsed.scopeId ?? "global",
       parsed.indexedAt,
     );
   }
@@ -191,6 +203,14 @@ export class SqliteMemoryVectorStore implements MemoryVectorStore {
       clauses.push("session_ids_json LIKE ?");
       parameters.push(`%${JSON.stringify(filters.sessionId)}%`);
     }
+    if (filters.scopeKind !== undefined) {
+      clauses.push("scope_kind = ?");
+      parameters.push(filters.scopeKind);
+    }
+    if (filters.scopeId !== undefined) {
+      clauses.push("scope_id = ?");
+      parameters.push(filters.scopeId);
+    }
     // Entity/tag JSON metadata remains small and derived. The canonical record is checked again after hydration.
     if (filters.entities && filters.entities.length > 0) {
       clauses.push(`(${filters.entities.map(() => "LOWER(entities_json) LIKE ?").join(" OR ")})`);
@@ -220,6 +240,8 @@ export class SqliteMemoryVectorStore implements MemoryVectorStore {
       entities: JSON.parse(row.entities_json) as unknown,
       tags: JSON.parse(row.tags_json) as unknown,
       sessionIds: JSON.parse(row.session_ids_json) as unknown,
+      scopeKind: row.scope_kind,
+      scopeId: row.scope_id,
       indexedAt: row.indexed_at,
     });
   }

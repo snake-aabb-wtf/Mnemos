@@ -4,10 +4,10 @@ Mnemos is a TypeScript cognitive-harness runtime. Its architectural direction an
 
 ## Current status
 
-**Phase 10 — Context Intelligence is implemented.** The project currently provides:
+**Phase 11 — Memory Intelligence is implemented.** The project currently provides:
 
-- `@mnemos/core`: `Harness`, separate Visible and Hidden Agent abstractions over replaceable `ModelProvider` / `EmbeddingProvider` interfaces, context accounting, memory consolidation, hybrid retrieval / evaluation contracts, Artifact / spill contracts, and a provider-neutral Tool Runtime.
-- `@mnemos/storage`: SQLite-backed append-only `HistoryStore`, separate mutable `StateStore`, durable compaction checkpoints, SQLite/FTS5 Memory, a durable consolidation-job queue, a rebuildable local vector index, and SQLite metadata plus filesystem-backed Artifacts.
+- `@mnemos/core`: `Harness`, separate Visible and Hidden Agent abstractions over replaceable `ModelProvider` / `EmbeddingProvider` interfaces, Context Intelligence, Memory Intelligence, memory consolidation, hybrid retrieval / evaluation contracts, Artifact / spill contracts, and a provider-neutral Tool Runtime.
+- `@mnemos/storage`: SQLite-backed append-only `HistoryStore`, separate mutable `StateStore`, durable compaction checkpoints, SQLite/FTS5 Memory with migrations, a durable consolidation-job queue, rebuildable vector and entity-graph projections, memory-intelligence audit records, and filesystem-backed Artifacts.
 - `@mnemos/cli`: an interactive, persistent chat shell using the mock provider.
 
 The runtime emits `message.received`, `message.generated`, `context.pressure`, `context.compaction.requested`, `context.evicted`, the `memory.consolidation.*` / `memory.*` lifecycle events, compact `tool.*` lifecycle events, compact `ptc.started` / `ptc.completed` / `ptc.failed` lifecycle events, and `tool.discovery.searched`, `tool.discovery.described`, `tool.loaded`, and `tool.unloaded` discovery events.
@@ -206,6 +206,18 @@ Memory retrieval is packed against the policy's effective retrieval-token budget
 
 The current policy is deterministic and process-local. It does not implement adaptive learned routing, wall-clock pin expiry, semantic pin dedupe, or a separate Hidden Agent context policy; those remain future work.
 
+## Memory Intelligence
+
+Phase 11 adds a deterministic `MemoryIntelligenceService` between Hidden Agent proposals and `MemoryStore`. It keeps History canonical and treats every reinforcement, merge, abstraction, stale mark, decay score, and entity relationship as rebuildable derived state with source provenance.
+
+- Reinforcement unions distinct `(sessionId, messageId)` evidence, is idempotent across retries, saturates confirmation/reinforcement scores, and evolves confidence with source-type caps. Repeated assistant inference cannot become an explicit fact by repetition.
+- Effective retrieval signals combine similarity, confidence, importance, reinforcement, type/durability-aware time decay, stale status, and lifecycle status. Decay is recomputed from timestamps and policy; stale records remain queryable and are not deleted.
+- Repeated episodic events can form a semantic abstraction only after configurable event-count, time-span, confidence, and evidence-diversity thresholds. Compatible records can merge into a provenance-preserving active record while originals remain archived with `mergedInto`; temporal replacement remains the separate `supersede` operation.
+- A lightweight SQLite entity projection canonicalizes aliases such as `Postgres`/`PostgreSQL`, stores relationship provenance, emits entity lifecycle events, and can be cleared and rebuilt from Memory. Project/session scopes prevent cross-scope merges.
+- `MemoryIntelligenceAuditStore` is replaceable; the default SQLite implementation records operation, memory IDs, source IDs, policy version, reason, and timestamp without storing raw model output.
+
+The default maintenance path is explicit and deterministic (`runMaintenance()`); no daemon or API key is required. `MockModelProvider`/scripted proposals and deterministic embeddings are used at the external intelligence boundary, while MemoryStore, HistoryStore, retrieval, consolidation, source tracing, SQLite persistence, and runtime policy execute for real. Optional live-provider tests must be run explicitly and skip when credentials are unavailable.
+
 ## Requirements
 
 - Node.js 22+
@@ -222,11 +234,12 @@ pnpm eval:retrieval
 pnpm eval:ptc
 pnpm eval:tools
 pnpm eval:context
+pnpm eval:memory
 pnpm chat
 ```
 
 `pnpm chat` stores data in `./mnemos.sqlite` by default. Set `MNEMOS_DB_PATH` and `MNEMOS_SESSION_ID` to choose the database location and conversation session. The CLI intentionally remains a minimal mock chat host; embedders enable the native tool loop by supplying `ToolRegistry`, `ToolDispatcher`, and host-granted permissions to `Harness`.
 
-## Phase 11 extension points
+## Phase 12 extension points
 
-Dynamic discovery leaves the following stable boundaries for the next phase: `ToolDiscoveryIndex.search`, `ToolDiscoveryRuntime.describe`, `LoadedToolSet` snapshots and lifecycle, schema hashes, `PtcSdkGenerator.describe(allowedToolNames)`, and the existing `ToolDispatcher` permission gate. Semantic discovery, provider-backed ranking, or remote catalog adapters can be added behind these contracts without exposing implementations or changing native/PTC execution semantics. `MemoryVectorStore`, `EmbeddingProvider`, and `MemoryReranker` remain independently replaceable for future retrieval scale.
+The completed Phase 11 leaves stable boundaries for reliability work: `MemoryIntelligenceAuditStore`, `EntityGraphStore`, `MemoryDecayPolicy`, `MemoryIntelligenceService.runMaintenance()`, deterministic proposal schemas, and `MemoryVectorStore`/`EmbeddingProvider`/`MemoryReranker` replacement contracts. Phase 12 can add benchmark campaigns, recovery tests, and metrics without making Memory or the entity graph a source of truth. Dynamic discovery remains behind `ToolDiscoveryIndex.search`, `ToolDiscoveryRuntime.describe`, `LoadedToolSet`, and the existing `ToolDispatcher` permission gate.

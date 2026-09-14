@@ -34,6 +34,17 @@ interface StoredMemory {
   source_type: MemoryRecord["sourceType"];
   status: MemoryStatus;
   superseded_by: string | null;
+  merged_into: string | null;
+  derived_from_memory_ids: string;
+  confirmation_count: number;
+  reinforcement_score: number;
+  last_reinforced_at: string | null;
+  stale: number;
+  stale_since: string | null;
+  durability: MemoryRecord["durability"];
+  scope_kind: MemoryRecord["scope"]["kind"];
+  scope_id: string;
+  entity_relations: string;
 }
 
 interface SearchRow extends StoredMemory {
@@ -61,6 +72,17 @@ function migrateMemory(db: Database.Database): void {
       source_type TEXT NOT NULL CHECK (source_type IN ('explicit_user_statement', 'tool_observation', 'assistant_inference', 'derived_summary')),
       status TEXT NOT NULL CHECK (status IN ('active', 'provisional', 'superseded', 'archived')),
       superseded_by TEXT REFERENCES memory_records(id),
+      merged_into TEXT REFERENCES memory_records(id),
+      derived_from_memory_ids TEXT NOT NULL DEFAULT '[]',
+      confirmation_count INTEGER NOT NULL DEFAULT 1 CHECK (confirmation_count >= 0),
+      reinforcement_score REAL NOT NULL DEFAULT 0 CHECK (reinforcement_score >= 0 AND reinforcement_score <= 1),
+      last_reinforced_at TEXT,
+      stale INTEGER NOT NULL DEFAULT 0 CHECK (stale IN (0, 1)),
+      stale_since TEXT,
+      durability TEXT NOT NULL DEFAULT 'normal' CHECK (durability IN ('durable', 'normal', 'ephemeral')),
+      scope_kind TEXT NOT NULL DEFAULT 'global' CHECK (scope_kind IN ('global', 'user', 'project', 'session', 'entity')),
+      scope_id TEXT NOT NULL DEFAULT 'global',
+      entity_relations TEXT NOT NULL DEFAULT '[]',
       CHECK ((status = 'superseded' AND superseded_by IS NOT NULL) OR (status <> 'superseded' AND superseded_by IS NULL))
     );
     CREATE INDEX IF NOT EXISTS idx_memory_records_status_type_updated
@@ -106,6 +128,24 @@ function migrateMemory(db: Database.Database): void {
       INSERT INTO memory_fts(rowid, content) VALUES (new.rowid, new.content);
     END;
   `);
+  const columns = db.prepare("PRAGMA table_info(memory_records)").all() as Array<{ name: string }>;
+  const existing = new Set(columns.map((column) => column.name));
+  const additions: Array<[string, string]> = [
+    ["merged_into", "TEXT REFERENCES memory_records(id)"],
+    ["derived_from_memory_ids", "TEXT NOT NULL DEFAULT '[]'"],
+    ["confirmation_count", "INTEGER NOT NULL DEFAULT 1"],
+    ["reinforcement_score", "REAL NOT NULL DEFAULT 0"],
+    ["last_reinforced_at", "TEXT"],
+    ["stale", "INTEGER NOT NULL DEFAULT 0"],
+    ["stale_since", "TEXT"],
+    ["durability", "TEXT NOT NULL DEFAULT 'normal'"],
+    ["scope_kind", "TEXT NOT NULL DEFAULT 'global'"],
+    ["scope_id", "TEXT NOT NULL DEFAULT 'global'"],
+    ["entity_relations", "TEXT NOT NULL DEFAULT '[]'"],
+  ];
+  for (const [name, definition] of additions) {
+    if (!existing.has(name)) db.exec(`ALTER TABLE memory_records ADD COLUMN ${name} ${definition}`);
+  }
 }
 
 /** SQLite + FTS5 implementation of the Phase 3 MemoryStore contract. */
@@ -125,8 +165,10 @@ export class SqliteMemoryStore implements MemoryStore {
       this.db.prepare(`
         INSERT INTO memory_records (
           id, type, content, created_at, updated_at, last_confirmed_at,
-          importance, confidence, source_type, status, superseded_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+          importance, confidence, source_type, status, superseded_by, merged_into,
+          derived_from_memory_ids, confirmation_count, reinforcement_score, last_reinforced_at,
+          stale, stale_since, durability, scope_kind, scope_id, entity_relations
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
         parsed.type,
@@ -138,6 +180,17 @@ export class SqliteMemoryStore implements MemoryStore {
         parsed.confidence,
         parsed.sourceType,
         parsed.status,
+        parsed.mergedInto ?? null,
+        JSON.stringify(parsed.derivedFromMemoryIds),
+        parsed.confirmationCount,
+        parsed.reinforcementScore,
+        parsed.lastReinforcedAt ?? null,
+        parsed.stale ? 1 : 0,
+        parsed.staleSince ?? null,
+        parsed.durability,
+        parsed.scope.kind,
+        parsed.scope.id,
+        JSON.stringify(parsed.entityRelations),
       );
       this.replaceSources(id, parsed.sourceReferences);
       this.replaceValues("memory_entities", "entity", id, parsed.entities);
@@ -178,6 +231,19 @@ export class SqliteMemoryStore implements MemoryStore {
       if (parsed.confidence !== undefined) { assignments.push("confidence = ?"); parameters.push(parsed.confidence); }
       if (parsed.sourceType !== undefined) { assignments.push("source_type = ?"); parameters.push(parsed.sourceType); }
       if (parsed.status !== undefined) { assignments.push("status = ?"); parameters.push(parsed.status); }
+      if (parsed.mergedInto !== undefined) { assignments.push("merged_into = ?"); parameters.push(parsed.mergedInto); }
+      if (parsed.derivedFromMemoryIds !== undefined) { assignments.push("derived_from_memory_ids = ?"); parameters.push(JSON.stringify(parsed.derivedFromMemoryIds)); }
+      if (parsed.confirmationCount !== undefined) { assignments.push("confirmation_count = ?"); parameters.push(parsed.confirmationCount); }
+      if (parsed.reinforcementScore !== undefined) { assignments.push("reinforcement_score = ?"); parameters.push(parsed.reinforcementScore); }
+      if (parsed.lastReinforcedAt !== undefined) { assignments.push("last_reinforced_at = ?"); parameters.push(parsed.lastReinforcedAt); }
+      if (parsed.stale !== undefined) { assignments.push("stale = ?"); parameters.push(parsed.stale ? 1 : 0); }
+      if (parsed.staleSince !== undefined) { assignments.push("stale_since = ?"); parameters.push(parsed.staleSince); }
+      if (parsed.durability !== undefined) { assignments.push("durability = ?"); parameters.push(parsed.durability); }
+      if (parsed.scope !== undefined) {
+        assignments.push("scope_kind = ?", "scope_id = ?");
+        parameters.push(parsed.scope.kind, parsed.scope.id);
+      }
+      if (parsed.entityRelations !== undefined) { assignments.push("entity_relations = ?"); parameters.push(JSON.stringify(parsed.entityRelations)); }
       parameters.push(memoryId);
       this.db.prepare(`UPDATE memory_records SET ${assignments.join(", ")} WHERE id = ?`).run(...parameters);
       if (parsed.sourceReferences !== undefined) this.replaceSources(memoryId, parsed.sourceReferences);
@@ -294,6 +360,16 @@ export class SqliteMemoryStore implements MemoryStore {
       sourceType: row.source_type,
       status: row.status,
       ...(row.superseded_by === null ? {} : { supersededBy: row.superseded_by }),
+      ...(row.merged_into === null ? {} : { mergedInto: row.merged_into }),
+      derivedFromMemoryIds: JSON.parse(row.derived_from_memory_ids ?? "[]") as unknown,
+      confirmationCount: row.confirmation_count,
+      reinforcementScore: row.reinforcement_score,
+      ...(row.last_reinforced_at === null ? {} : { lastReinforcedAt: row.last_reinforced_at }),
+      stale: row.stale === 1,
+      ...(row.stale_since === null ? {} : { staleSince: row.stale_since }),
+      durability: row.durability,
+      scope: { kind: row.scope_kind, id: row.scope_id },
+      entityRelations: JSON.parse(row.entity_relations ?? "[]") as unknown,
       entities,
       tags,
     });
@@ -313,7 +389,7 @@ export class SqliteMemoryStore implements MemoryStore {
     for (const value of new Set(values.map((value) => value.trim()))) insert.run(memoryId, value);
   }
 
-  private filters(query: Pick<MemoryListQuery, "types" | "statuses" | "sourceTypes" | "entities" | "tags" | "minimumConfidence" | "before" | "after" | "sessionId">, defaultStatuses?: readonly MemoryStatus[]): { clauses: string[]; parameters: unknown[] } {
+  private filters(query: Pick<MemoryListQuery, "types" | "statuses" | "sourceTypes" | "entities" | "tags" | "minimumConfidence" | "before" | "after" | "sessionId" | "scopeKind" | "scopeId">, defaultStatuses?: readonly MemoryStatus[]): { clauses: string[]; parameters: unknown[] } {
     const clauses: string[] = [];
     const parameters: unknown[] = [];
     const statuses = query.statuses ?? defaultStatuses;
@@ -344,6 +420,14 @@ export class SqliteMemoryStore implements MemoryStore {
     if (query.sessionId !== undefined) {
       clauses.push("EXISTS (SELECT 1 FROM memory_sources filter_session WHERE filter_session.memory_id = m.id AND filter_session.session_id = ?)");
       parameters.push(query.sessionId);
+    }
+    if (query.scopeKind !== undefined) {
+      clauses.push("m.scope_kind = ?");
+      parameters.push(query.scopeKind);
+    }
+    if (query.scopeId !== undefined) {
+      clauses.push("m.scope_id = ?");
+      parameters.push(query.scopeId);
     }
     if (query.entities && query.entities.length > 0) {
       clauses.push(`EXISTS (SELECT 1 FROM memory_entities filter_entity WHERE filter_entity.memory_id = m.id AND LOWER(filter_entity.entity) IN (${query.entities.map(() => "?").join(", ")}))`);

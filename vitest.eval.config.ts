@@ -8,10 +8,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["packages/*/src/**/*.test.ts"],
+    include: ["packages/*/src/**/*.eval.ts"],
     environment: "node",
-    // PTC tests spawn resource-limited child processes; serial files avoid
-    // host CPU contention making the hard-timeout assertion nondeterministic.
-    fileParallelism: false,
   },
 });

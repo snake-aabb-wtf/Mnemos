@@ -864,6 +864,8 @@ Vitest
 - integration tests
 - simulated long-context tests
 
+所有 Phase Definition of Done 必须可以在没有任何付费模型凭据的离线环境中完成。Core、MemoryStore、MemoryRetriever、Hidden Agent consolidation、source tracing、SQLite persistence、runtime policy 和故障注入测试使用 `MockModelProvider`、scripted deterministic adapters、deterministic embeddings、synthetic workloads 与 fixtures。真实 Provider integration tests（如果保留）只能作为显式的 optional `test:live` 流程；缺少 API key 时必须 SKIP，不能让默认 `pnpm test` 失败，也不能成为 Phase 完成条件。外部模型智能可以 mock，但 Mnemos 自身的 Memory、History、retrieval、consolidation 和 runtime 行为必须真实执行。
+
 ---
 
 ## 18.7 Logging
@@ -1620,6 +1622,8 @@ Phase 10 不实现 memory decay、entity graph、confidence evolution 或新的 
 - stale memory detection
 
 Memory 不只是“保存摘要”，而开始形成长期认知状态。
+
+Phase 11 的实现保持 `History = canonical source of truth`：reinforcement、decay、stale、merge、abstraction 和 entity graph 都是可重建的派生状态，原始 source references 永不被这些操作删除。`MemoryIntelligenceService` 负责 deterministic policy、validated Hidden Agent proposals、独立证据去重、confidence saturation、type/durability-aware effective scoring、maintenance idempotency、scope checks 与 provenance-preserving transitions；`MemoryStore` 仍只负责持久化，`MemoryRetriever` 消费统一的 intelligence signals。SQLite migrations 为 Phase 10 数据库增加这些派生字段和可重建的 entity/audit projections。Phase 11 的默认测试和 `eval:memory` 完全离线，不进入 Phase 12 的 reliability/evaluation campaign。
 
 ---
 

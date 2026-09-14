@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
   memorySourceTypeSchema,
+  memoryScopeKindSchema,
   memoryStatusSchema,
   memoryTypeSchema,
   type MemoryIndexMaintainer,
@@ -11,6 +12,7 @@ import {
   type MemoryStatus,
   type MemoryType,
 } from "./memory.js";
+import { defaultMemoryDecayPolicy, memoryIntelligenceSignals, type MemoryDecayPolicy } from "./memory-intelligence.js";
 
 const textSchema = z.string().trim().min(1);
 const vectorSchema = z.array(z.number().finite()).min(1);
@@ -68,6 +70,8 @@ export const memoryVectorRecordSchema = z.object({
   entities: z.array(textSchema),
   tags: z.array(textSchema),
   sessionIds: z.array(textSchema),
+  scopeKind: memoryScopeKindSchema.optional(),
+  scopeId: textSchema.optional(),
   indexedAt: z.string().datetime(),
 }).strict().superRefine((record, context) => {
   if (record.values.length !== record.dimensions) {
@@ -86,6 +90,8 @@ export interface MemoryVectorFilters {
   before?: string;
   after?: string;
   sessionId?: string;
+  scopeKind?: MemoryRecord["scope"]["kind"];
+  scopeId?: string;
 }
 
 export interface MemoryVectorSearchQuery {
@@ -124,6 +130,8 @@ export const memoryRetrievalQuerySchema = z.object({
   before: z.string().datetime().optional(),
   after: z.string().datetime().optional(),
   sessionId: textSchema.optional(),
+  scopeKind: z.enum(["global", "user", "project", "session", "entity"]).optional(),
+  scopeId: textSchema.optional(),
 }).strict().refine((query) => query.before === undefined || query.after === undefined || query.before >= query.after, "before must be at or after after");
 export type MemoryRetrievalQuery = z.input<typeof memoryRetrievalQuerySchema>;
 
@@ -138,6 +146,9 @@ export interface MemoryRetrievalSignals {
   recency?: number;
   confidence?: number;
   status?: number;
+  reinforcement?: number;
+  decay?: number;
+  stale?: number;
 }
 
 export interface MemoryRetrievalResult {
@@ -176,6 +187,10 @@ export interface DeterministicMemoryRerankerOptions {
   statusWeight?: number;
   confidenceWeight?: number;
   recencyWeight?: number;
+  intelligencePolicy?: MemoryDecayPolicy;
+  reinforcementWeight?: number;
+  decayWeight?: number;
+  staleWeight?: number;
 }
 
 /** A deterministic domain-aware reranker; status and confidence outweigh pure recency. */
@@ -185,6 +200,10 @@ export class DeterministicMemoryReranker implements MemoryReranker {
   private readonly statusWeight: number;
   private readonly confidenceWeight: number;
   private readonly recencyWeight: number;
+  private readonly intelligencePolicy: MemoryDecayPolicy;
+  private readonly reinforcementWeight: number;
+  private readonly decayWeight: number;
+  private readonly staleWeight: number;
 
   constructor(options: DeterministicMemoryRerankerOptions = {}) {
     this.now = options.now ?? (() => new Date());
@@ -192,6 +211,13 @@ export class DeterministicMemoryReranker implements MemoryReranker {
     this.statusWeight = options.statusWeight ?? 0.06;
     this.confidenceWeight = options.confidenceWeight ?? 0.04;
     this.recencyWeight = options.recencyWeight ?? 0.02;
+    this.intelligencePolicy = options.intelligencePolicy ?? defaultMemoryDecayPolicy;
+    // Keep Phase 5 fused-rank behavior dominant; intelligence signals are
+    // bounded tie-breakers rather than a way for an unrelated fresh record to
+    // outrank an exact lexical match.
+    this.reinforcementWeight = options.reinforcementWeight ?? 0.004;
+    this.decayWeight = options.decayWeight ?? 0.003;
+    this.staleWeight = options.staleWeight ?? 0.01;
   }
 
   async rerank(request: MemoryRerankRequest): Promise<readonly MemoryRetrievalResult[]> {
@@ -199,16 +225,23 @@ export class DeterministicMemoryReranker implements MemoryReranker {
     const results = request.candidates.map((candidate) => {
       const recency = this.recency(candidate.memory.updatedAt, now);
       const status = statusSignal(candidate.memory.status);
+      const intelligence = memoryIntelligenceSignals(candidate.memory, new Date(now), this.intelligencePolicy);
       const signals: MemoryRetrievalSignals = {
         ...candidate.signals,
         recency,
         confidence: candidate.memory.confidence,
         status,
+        reinforcement: intelligence.reinforcement,
+        decay: intelligence.decay,
+        stale: intelligence.stale,
       };
       const score = candidate.fusedScore
         + status * this.statusWeight
         + candidate.memory.confidence * this.confidenceWeight
-        + recency * this.recencyWeight;
+        + recency * this.recencyWeight
+        + intelligence.reinforcement * this.reinforcementWeight
+        + intelligence.decay * this.decayWeight
+        - (candidate.memory.stale ? this.staleWeight : 0);
       const matchedBy = new Set(candidate.matchedBy);
       if (request.query.before !== undefined || request.query.after !== undefined || this.recencyWeight > 0) matchedBy.add("temporal");
       if (hasMetadataFilters(request.query)) matchedBy.add("metadata");
@@ -409,6 +442,8 @@ export class MemoryEmbeddingIndexer implements MemoryIndexMaintainer {
       entities: memory.entities,
       tags: memory.tags,
       sessionIds: [...new Set(memory.sourceReferences.map((source) => source.sessionId))],
+      scopeKind: memory.scope.kind,
+      scopeId: memory.scope.id,
       indexedAt: new Date().toISOString(),
     });
   }
@@ -433,6 +468,8 @@ function toFilters(query: z.output<typeof memoryRetrievalQuerySchema>): MemoryVe
     ...(query.before === undefined ? {} : { before: query.before }),
     ...(query.after === undefined ? {} : { after: query.after }),
     ...(query.sessionId === undefined ? {} : { sessionId: query.sessionId }),
+    ...(query.scopeKind === undefined ? {} : { scopeKind: query.scopeKind }),
+    ...(query.scopeId === undefined ? {} : { scopeId: query.scopeId }),
   };
 }
 
@@ -445,6 +482,8 @@ function matchesFilters(memory: MemoryRecord, query: z.output<typeof memoryRetri
   if (query.after !== undefined && memory.createdAt < query.after) return false;
   if (query.entities !== undefined && !memory.entities.some((entity) => query.entities!.some((expected) => entity.toLocaleLowerCase() === expected.toLocaleLowerCase()))) return false;
   if (query.tags !== undefined && !memory.tags.some((tag) => query.tags!.some((expected) => tag.toLocaleLowerCase() === expected.toLocaleLowerCase()))) return false;
+  if (query.scopeKind !== undefined && memory.scope.kind !== query.scopeKind) return false;
+  if (query.scopeId !== undefined && memory.scope.id !== query.scopeId) return false;
   return query.sessionId === undefined || memory.sourceReferences.some((source) => source.sessionId === query.sessionId);
 }
 
@@ -454,7 +493,8 @@ function entityTermsFromQuery(query: string): string[] {
 
 function hasMetadataFilters(query: z.output<typeof memoryRetrievalQuerySchema>): boolean {
   return query.types !== undefined || query.sourceTypes !== undefined || query.entities !== undefined
-    || query.tags !== undefined || query.minimumConfidence !== undefined || query.sessionId !== undefined;
+    || query.tags !== undefined || query.minimumConfidence !== undefined || query.sessionId !== undefined
+    || query.scopeKind !== undefined || query.scopeId !== undefined;
 }
 
 function statusSignal(status: MemoryStatus): number {

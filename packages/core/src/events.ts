@@ -30,6 +30,28 @@ export interface HarnessEventMap {
   "memory.created": { jobId: string; memory: MemoryRecord };
   "memory.updated": { jobId: string; memory: MemoryRecord };
   "memory.superseded": { jobId: string; superseded: MemoryRecord; replacement: MemoryRecord };
+  "memory.reinforced": {
+    memoryId: string;
+    sourceIds: readonly string[];
+    confirmationCount: number;
+    confidence: number;
+    reinforcementScore: number;
+  };
+  "memory.merged": {
+    memoryId: string;
+    mergedMemoryIds: readonly string[];
+    sourceIds: readonly string[];
+    reason?: string;
+  };
+  "memory.abstracted": {
+    memoryId: string;
+    derivedFromMemoryIds: readonly string[];
+    sourceIds: readonly string[];
+    reason?: string;
+  };
+  "memory.marked_stale": { memoryId: string; staleSince: string; reason?: string };
+  "entity.created": { entityId: string; canonicalName: string };
+  "entity.related": { relationId: string; fromEntityId: string; toEntityId: string; relation: string; memoryIds: readonly string[] };
   /** Tool events intentionally carry identifiers and sizes, never raw arguments or outputs. */
   "tool.called": { callId: string; toolName: string; sessionId: string; agentId: string; status: "called" };
   "tool.completed": {
