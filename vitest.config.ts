@@ -13,5 +13,7 @@ export default defineConfig({
     // PTC tests spawn resource-limited child processes; serial files avoid
     // host CPU contention making the hard-timeout assertion nondeterministic.
     fileParallelism: false,
+    maxWorkers: 1,
+    minWorkers: 1,
   },
 });

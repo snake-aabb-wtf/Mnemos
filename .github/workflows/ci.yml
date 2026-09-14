@@ -60,3 +60,9 @@ jobs:
 
       - name: Run memory intelligence evaluation
         run: pnpm eval:memory
+
+      - name: Run reliability evaluation
+        run: pnpm eval:reliability
+
+      - name: Run 10k-turn reliability soak
+        run: pnpm eval:soak

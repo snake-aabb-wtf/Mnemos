@@ -17,6 +17,8 @@
     "eval:tools": "vitest run packages/core/src/tool-discovery.test.ts",
     "eval:context": "vitest run packages/core/src/context-intelligence.test.ts",
     "eval:memory": "vitest run --config vitest.eval.config.ts packages/storage/src/memory-intelligence.eval.ts",
+    "eval:reliability": "vitest run --config vitest.eval.config.ts packages/storage/src/reliability.eval.ts",
+    "eval:soak": "vitest run --config vitest.eval.config.ts packages/storage/src/reliability-soak.eval.ts",
     "chat": "pnpm --filter @mnemos/cli start"
   },
   "devDependencies": {

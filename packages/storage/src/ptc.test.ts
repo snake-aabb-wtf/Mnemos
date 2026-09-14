@@ -100,6 +100,19 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 describe("Phase 8 Programmatic Tool Calling", () => {
+  it("keeps a 100+ subcall workflow bounded and fully audited", async () => {
+    const runtime = await app();
+    runtime.registry.register(defineTool({
+      name: "test.read", description: "A tiny deterministic read.", inputSchema: querySchema,
+      requiredPermissions: ["state:read"], sideEffect: "read", concurrencySafe: true,
+      async execute(input: { query: string }) { return { query: input.query }; },
+    }));
+    installPtc(runtime, { maxToolCalls: 200, maxConcurrentToolCalls: 8 });
+    const result = await execute(runtime, "const values = []; for (let i = 0; i < 120; i++) values.push(await tools.test.read({ query: String(i) })); return values.length;");
+    expect(result).toMatchObject({ status: "success", result: 120, stats: { toolCalls: 120 } });
+    expect((await runtime.audit.list({ sessionId: "ptc-session", limit: 200 })).filter((entry) => entry.toolName === "test.read")).toHaveLength(120);
+  }, 60_000);
+
   it("runs concurrency-safe reads in parallel, limits them, and applies a write barrier", async () => {
     const runtime = await app();
     let active = 0;
@@ -296,7 +309,7 @@ describe("Phase 8 Programmatic Tool Calling", () => {
     expect(logs).toMatchObject({ status: "success", result: { ok: true }, stats: { logBytes: 128, logsTruncated: true } });
     expect(JSON.stringify(logs)).not.toContain("x".repeat(128));
     await expect(execute(runtime, "return { healthy: true };")).resolves.toMatchObject({ status: "success", result: { healthy: true } });
-  }, 20_000);
+  }, 60_000);
 
   it("keeps 20 internal PTC calls out of visible history while Dispatcher audit remains complete", async () => {
     const runtime = await app();

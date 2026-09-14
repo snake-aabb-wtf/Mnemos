@@ -4,11 +4,19 @@ Mnemos is a TypeScript cognitive-harness runtime. Its architectural direction an
 
 ## Current status
 
-**Phase 11 — Memory Intelligence is implemented.** The project currently provides:
+**Phase 12 — Reliability & Evaluation is implemented.** The project currently provides:
 
 - `@mnemos/core`: `Harness`, separate Visible and Hidden Agent abstractions over replaceable `ModelProvider` / `EmbeddingProvider` interfaces, Context Intelligence, Memory Intelligence, memory consolidation, hybrid retrieval / evaluation contracts, Artifact / spill contracts, and a provider-neutral Tool Runtime.
 - `@mnemos/storage`: SQLite-backed append-only `HistoryStore`, separate mutable `StateStore`, durable compaction checkpoints, SQLite/FTS5 Memory with migrations, a durable consolidation-job queue, rebuildable vector and entity-graph projections, memory-intelligence audit records, and filesystem-backed Artifacts.
 - `@mnemos/cli`: an interactive, persistent chat shell using the mock provider.
+
+Phase 12 adds an offline reliability campaign rather than a new production service. The runtime now ships reusable
+`SeededRandom`, `SyntheticConversationGenerator`, `FaultInjectionController`, normalized replay snapshots, and
+`ReliabilityInvariant` checks. SQLite-backed campaigns exercise 1k turns by default and a 10k-turn soak explicitly;
+they verify canonical History preservation, deterministic compaction boundaries, restart recovery, Artifact orphan
+detection, durable consolidation retries, and event-subscriber failure isolation. No API key or paid provider is
+required: external model and embedding intelligence remains replaceable by mocks/scripts while the Mnemos runtime and
+storage execute for real.
 
 The runtime emits `message.received`, `message.generated`, `context.pressure`, `context.compaction.requested`, `context.evicted`, the `memory.consolidation.*` / `memory.*` lifecycle events, compact `tool.*` lifecycle events, compact `ptc.started` / `ptc.completed` / `ptc.failed` lifecycle events, and `tool.discovery.searched`, `tool.discovery.described`, `tool.loaded`, and `tool.unloaded` discovery events.
 
@@ -235,11 +243,34 @@ pnpm eval:ptc
 pnpm eval:tools
 pnpm eval:context
 pnpm eval:memory
+pnpm eval:reliability
+pnpm eval:soak
 pnpm chat
 ```
 
 `pnpm chat` stores data in `./mnemos.sqlite` by default. Set `MNEMOS_DB_PATH` and `MNEMOS_SESSION_ID` to choose the database location and conversation session. The CLI intentionally remains a minimal mock chat host; embedders enable the native tool loop by supplying `ToolRegistry`, `ToolDispatcher`, and host-granted permissions to `Harness`.
 
+## Reliability and evaluation
+
+`pnpm eval:reliability` runs the deterministic 1k-turn campaign and prints compaction count, evicted message count,
+peak visible context, p50/p95 compaction latency, and total duration. `pnpm eval:soak` runs the same workload at 10k
+turns; it is intentionally explicit because it takes longer than the default unit suite. Both commands use temporary
+SQLite databases and clean them up after completion.
+
+Reliability checks are deliberately normalized: UUIDs and timestamps are ignored when comparing replayed logical
+state, while History content, Memory provenance/status, compaction source ranges, Artifact metadata, and job state are
+kept. Fault schedules are deterministic and can model throw, timeout, or malformed-return failures. Event subscribers
+are observational; a failing subscriber cannot invalidate a completed core operation.
+
+The campaign is not a claim of production hardening. Audit storage is still local, vector fallback is SQLite-based,
+and process-level PTC isolation remains the Phase 8 backend boundary. Distributed workers, production authentication,
+external observability, and stronger sandbox hosts remain Phase 13 work.
+
 ## Phase 12 extension points
 
-The completed Phase 11 leaves stable boundaries for reliability work: `MemoryIntelligenceAuditStore`, `EntityGraphStore`, `MemoryDecayPolicy`, `MemoryIntelligenceService.runMaintenance()`, deterministic proposal schemas, and `MemoryVectorStore`/`EmbeddingProvider`/`MemoryReranker` replacement contracts. Phase 12 can add benchmark campaigns, recovery tests, and metrics without making Memory or the entity graph a source of truth. Dynamic discovery remains behind `ToolDiscoveryIndex.search`, `ToolDiscoveryRuntime.describe`, `LoadedToolSet`, and the existing `ToolDispatcher` permission gate.
+The completed Phase 12 leaves stable boundaries for Phase 13 hardening: `ReliabilityInvariant`,
+`SyntheticConversationGenerator`, `FaultInjectionController`, normalized snapshots, `MemoryIntelligenceAuditStore`,
+`EntityGraphStore`, `MemoryDecayPolicy`, `MemoryIntelligenceService.runMaintenance()`, deterministic proposal
+schemas, and `MemoryVectorStore`/`EmbeddingProvider`/`MemoryReranker` replacement contracts. Dynamic discovery remains
+behind `ToolDiscoveryIndex.search`, `ToolDiscoveryRuntime.describe`, `LoadedToolSet`, and the existing
+`ToolDispatcher` permission gate. Phase 13 is not implemented.

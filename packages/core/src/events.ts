@@ -146,6 +146,17 @@ export class EventBus<Events extends object = HarnessEventMap> {
   async emit<K extends keyof Events>(event: K, payload: Events[K]): Promise<void> {
     const listeners = this.listeners.get(event);
     if (!listeners) return;
-    for (const listener of listeners) await listener(payload);
+    // Event delivery is observational. A broken subscriber must not turn a
+    // committed runtime transaction into a reported failure (or prevent the
+    // remaining subscribers from seeing the event). Persistence and primary
+    // execution paths remain responsible for their own error handling.
+    for (const listener of listeners) {
+      try {
+        await listener(payload);
+      } catch {
+        // Deliberately swallow subscriber failures. A future durable audit
+        // sink can record them without changing this non-blocking contract.
+      }
+    }
   }
 }

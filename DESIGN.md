@@ -1671,6 +1671,20 @@ Phase 11 的实现保持 `History = canonical source of truth`：reinforcement�
 
 ---
 
+Phase 12 的可靠性验证保持完全离线：默认测试和 `eval:reliability` / `eval:soak` 使用
+`MockModelProvider`、scripted/deterministic providers、deterministic embeddings、seeded synthetic workloads、
+simulated clocks 与 `FaultInjectionController`，不要求任何 API key。真实 provider 测试若存在只能显式运行，
+缺少凭据时必须 SKIP，不能成为 Phase 12 Definition of Done 的前置条件。测试真实执行 History、Context、
+Memory、Retrieval、Artifact、Tool Runtime、PTC、Discovery 与 SQLite recovery，不 mock 掉 Mnemos 自身。
+
+当前 Phase 12 已实现可复用 `ReliabilityInvariant` 检查、`SyntheticConversationGenerator`、fault schedule、
+normalized replay snapshot，以及 1k-turn reliability evaluation 和显式 10k-turn soak。验证覆盖 canonical
+History 保留、compaction replay/recovery、Memory provenance、Artifact orphan detection、durable job retry、
+subscriber failure isolation 与上下文上限。它是 deterministic correctness/回归基线，不是 Phase 13 的生产级
+分布式可靠性、认证、外部 metrics、durable worker platform 或更强的 sandbox 隔离。
+
+---
+
 # Phase 13 — Production Hardening
 
 实现：
