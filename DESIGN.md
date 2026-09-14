@@ -1863,6 +1863,24 @@ expose raw prompts, hidden reasoning, secrets, large tool bodies, or private run
 9. Large intermediate results should remain outside Context.
 10. PTC cannot bypass Tool Dispatcher.
 11. Tool permissions belong to the runtime, not generated code.
+
+---
+
+# Frontend F4–F6 — Runtime Exploration and Operations
+
+The completed frontend roadmap keeps the browser as a bounded, read-only adapter over the runtime. F4 exposes Artifact
+metadata/preview/range/query, the shared ToolRegistry catalog, and PTC execution timelines. F5 exposes Agent and durable
+Task summaries plus a bounded dependency/delegation graph. F6 upgrades Overview into a metrics dashboard and adds health,
+readiness, workers/jobs, storage, migrations, sandbox, provider, and audit diagnostics. The server maps these views through
+versioned Zod DTOs; production compositions inject real ArtifactStore, ToolRegistry, PtcRuntime, AgentTask stores,
+MetricsSink, and diagnostics implementations.
+
+Large bodies and intermediate results remain externalized as Artifact handles. The Console never executes a tool or PTC
+program, mutates a task, or receives prompts, raw arguments, secrets, chain-of-thought, private agent reasoning, or
+unbounded outputs. Native and PTC tool metadata is one shared contract. SSE is metadata-only and is used to invalidate
+bounded TanStack Query snapshots for task/agent/PTC/dashboard views. React Flow and Recharts are lazy-loaded; absent
+telemetry is represented as `N/A`. F4–F6 complete the current frontend roadmap; future work is limited to production
+authentication/authorization integration and richer host adapters, not a new frontend phase.
 12. Model providers must be replaceable.
 13. Storage implementations must be replaceable.
 14. RAG implementation must be replaceable.

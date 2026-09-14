@@ -355,7 +355,7 @@ tool authority remain behind `ToolDiscoveryIndex`, `LoadedToolSet`, and `ToolDis
 Extensions consume these boundaries through `AgentRegistry`, `TaskManager`, `SqliteAgentTaskStore`,
 `MultiAgentOrchestrator`, `HandoffContextBuilder`, and `AgentArtifactWorkspace`. No Phase 15 is implemented.
 
-## Web Console — Frontend F3
+## Web Console — Frontend F6 (complete)
 
 Frontend F3 (Context + Memory Inspector) builds on the F2 chat workbench and F1 observer surface over the existing runtime; it
 does not replace the Harness or become a second source of truth. The workspace now contains:
@@ -384,8 +384,7 @@ pnpm dev:console  # terminal 2, Vite on 127.0.0.1:5173
 
 Frontend verification is available through `pnpm test:server`, `pnpm test:console`, and `pnpm test:e2e` (Chromium).
 The full CI workflow runs these in addition to every existing backend build, test, and offline evaluation. Console
-assets remain intentionally modest (the exact bundle is reported by Vite). F4 artifact/tool/PTC views, F5 task
-graph, and F6 dashboard polish remain pending. F3 adds read-only Context telemetry, pressure/policy breakdown,
+assets remain intentionally modest (the exact bundle is reported by Vite). F3 adds read-only Context telemetry, pressure/policy breakdown,
 pin and compaction timelines, a Memory Explorer, retrieval explanations, and canonical History provenance links;
 it deliberately does not add Monaco, Artifact browser, React Flow, auth UI, or a provider key manager.
 
@@ -411,3 +410,15 @@ level, policy actions, pins, and compaction source ranges. The `/memory` Explore
 reinforcement, stale state, scope, timeline, and provenance without making the browser a second source of truth.
 The deterministic demo fixtures are offline-only; production adapters must map the same DTOs from real ContextManager,
 MemoryRetriever, MemoryStore, and HistoryStore implementations.
+
+F4–F6 complete the read-only operator surface. `/artifacts` provides paginated metadata, bounded previews, range reads,
+and query matches; `/tools` exposes the shared ToolRegistry catalog and loaded set; `/ptc` shows bounded execution timelines,
+barriers, quotas, and Artifact spills. `/agents` and `/tasks` show role/budget summaries, task dependencies, delegation,
+handoffs, and a responsive task graph. The upgraded Overview is a runtime dashboard with actual metrics and Recharts
+trends, while `/operations` reports health/readiness, workers/jobs, migrations, storage, sandbox capabilities, provider,
+and audit summaries. React Flow and Recharts are lazy-loaded; all list and body endpoints are bounded and use TanStack Query
+server state. SSE invalidates task/agent/PTC/dashboard queries without exposing private reasoning.
+
+The demo adapter is deterministic and offline-only. It demonstrates the DTO and browser contract; a production host must
+inject adapters backed by ArtifactStore, ToolRegistry/Discovery, PtcRuntime, AgentTask stores, MetricsSink, and diagnostics.
+The Console never executes tools, PTC, or task mutations directly, and it does not claim authentication/authorization.

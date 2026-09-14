@@ -31,9 +31,15 @@ import {
   memorySourceDtoSchema,
   historyMessageDtoSchema,
   retrievalInspectorDtoSchema,
+  artifactInspectorQuerySchema, artifactPageDtoSchema, artifactDetailDtoSchema,
+  toolInspectorQuerySchema, toolPageDtoSchema,
+  ptcPageDtoSchema, ptcExecutionDetailDtoSchema,
+  agentPageDtoSchema, agentDetailDtoSchema,
+  taskPageDtoSchema, taskDetailDtoSchema, taskGraphDtoSchema,
+  runtimeMetricsDtoSchema, operationsDtoSchema,
 } from "@mnemos/contracts";
 import type { HarnessEventMap } from "@mnemos/core";
-import { DemoConsoleRuntimeService, type ChatRuntimeService, type ConsoleRuntimeService, type InspectorRuntimeService } from "./runtime.js";
+import { DemoConsoleRuntimeService, type AdvancedInspectorRuntimeService, type ChatRuntimeService, type ConsoleRuntimeService, type InspectorRuntimeService } from "./runtime.js";
 
 export interface WebAccessPolicy {
   profile?: "development" | "test" | "production";
@@ -176,6 +182,22 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     if (retrieval === undefined) throw httpError(404, "not_found", "Message not found.");
     return sendDto(reply, retrievalInspectorDtoSchema, retrieval);
   });
+  app.get(`/api/${apiVersion}/artifacts`, async (request, reply) => { const inspector = requireAdvancedInspectorRuntime(runtime); const query = artifactInspectorQuerySchema.parse(request.query); if (query.cursor !== undefined && decodeCursor(query.cursor) < 0) throw httpError(400, "invalid_request", "Invalid cursor."); return sendDto(reply, artifactPageDtoSchema, await inspector.searchArtifacts(query)); });
+  app.get<{ Params: { artifactId: string } }>(`/api/${apiVersion}/artifacts/:artifactId`, async (request, reply) => { const inspector = requireAdvancedInspectorRuntime(runtime); const artifact = await inspector.getArtifact(routeId(request.params.artifactId, "artifact")); if (!artifact) throw httpError(404, "not_found", "Artifact not found."); return sendDto(reply, artifactDetailDtoSchema, artifact); });
+  app.get<{ Params: { artifactId: string } }>(`/api/${apiVersion}/artifacts/:artifactId/preview`, async (request, reply) => { const inspector = requireAdvancedInspectorRuntime(runtime); const artifact = await inspector.getArtifact(routeId(request.params.artifactId, "artifact"), { length: 16_384 }); if (!artifact) throw httpError(404, "not_found", "Artifact not found."); return sendDto(reply, artifactDetailDtoSchema, artifact); });
+  app.get<{ Params: { artifactId: string } }>(`/api/${apiVersion}/artifacts/:artifactId/range`, async (request, reply) => { const inspector = requireAdvancedInspectorRuntime(runtime); const raw = request.query as { offset?: string; length?: string }; const artifact = await inspector.getArtifact(routeId(request.params.artifactId, "artifact"), { offset: Math.max(0, Number(raw.offset ?? 0)), length: Math.min(16_384, Math.max(1, Number(raw.length ?? 4_096))) }); if (!artifact) throw httpError(404, "not_found", "Artifact not found."); return sendDto(reply, artifactDetailDtoSchema, artifact); });
+  app.get<{ Params: { artifactId: string } }>(`/api/${apiVersion}/artifacts/:artifactId/query`, async (request, reply) => { const inspector = requireAdvancedInspectorRuntime(runtime); const raw = request.query as { query?: string }; const artifact = await inspector.getArtifact(routeId(request.params.artifactId, "artifact"), { query: raw.query?.slice(0, 240) }); if (!artifact) throw httpError(404, "not_found", "Artifact not found."); return sendDto(reply, artifactDetailDtoSchema, artifact); });
+  app.get(`/api/${apiVersion}/tools`, async (request, reply) => { const inspector = requireAdvancedInspectorRuntime(runtime); return sendDto(reply, toolPageDtoSchema, await inspector.listTools(toolInspectorQuerySchema.parse(request.query))); });
+  app.get(`/api/${apiVersion}/tools/loaded`, async (request, reply) => { const inspector = requireAdvancedInspectorRuntime(runtime); return sendDto(reply, toolPageDtoSchema, await inspector.listTools(toolInspectorQuerySchema.parse({ ...request.query as object, loaded: true }))); });
+  app.get(`/api/${apiVersion}/ptc/executions`, async (request, reply) => { const inspector = requireAdvancedInspectorRuntime(runtime); const query = paginationQuerySchema.parse(request.query); return sendDto(reply, ptcPageDtoSchema, await inspector.listPtcExecutions(query)); });
+  app.get<{ Params: { executionId: string } }>(`/api/${apiVersion}/ptc/executions/:executionId`, async (request, reply) => { const inspector = requireAdvancedInspectorRuntime(runtime); const execution = await inspector.getPtcExecution(routeId(request.params.executionId, "execution")); if (!execution) throw httpError(404, "not_found", "PTC execution not found."); return sendDto(reply, ptcExecutionDetailDtoSchema, execution); });
+  app.get(`/api/${apiVersion}/agents`, async (request, reply) => { const inspector = requireAdvancedInspectorRuntime(runtime); return sendDto(reply, agentPageDtoSchema, await inspector.listAgents(paginationQuerySchema.parse(request.query))); });
+  app.get<{ Params: { agentId: string } }>(`/api/${apiVersion}/agents/:agentId`, async (request, reply) => { const inspector = requireAdvancedInspectorRuntime(runtime); const agent = await inspector.getAgent(routeId(request.params.agentId, "agent")); if (!agent) throw httpError(404, "not_found", "Agent not found."); return sendDto(reply, agentDetailDtoSchema, agent); });
+  app.get(`/api/${apiVersion}/tasks`, async (request, reply) => { const inspector = requireAdvancedInspectorRuntime(runtime); return sendDto(reply, taskPageDtoSchema, await inspector.listTasks(paginationQuerySchema.parse(request.query))); });
+  app.get(`/api/${apiVersion}/tasks/graph`, async (request, reply) => { const inspector = requireAdvancedInspectorRuntime(runtime); const raw = request.query as { rootTaskId?: string }; return sendDto(reply, taskGraphDtoSchema, await inspector.taskGraph(raw.rootTaskId)); });
+  app.get<{ Params: { taskId: string } }>(`/api/${apiVersion}/tasks/:taskId`, async (request, reply) => { const inspector = requireAdvancedInspectorRuntime(runtime); const task = await inspector.getTask(routeId(request.params.taskId, "task")); if (!task) throw httpError(404, "not_found", "Task not found."); return sendDto(reply, taskDetailDtoSchema, task); });
+  app.get(`/api/${apiVersion}/runtime/metrics`, async (_request, reply) => { const inspector = requireAdvancedInspectorRuntime(runtime); return sendDto(reply, runtimeMetricsDtoSchema, await inspector.metrics()); });
+  app.get(`/api/${apiVersion}/runtime/operations`, async (_request, reply) => { const inspector = requireAdvancedInspectorRuntime(runtime); return sendDto(reply, operationsDtoSchema, await inspector.operations()); });
   app.post(`/api/${apiVersion}/dev/demo-session`, async (_request, reply) => {
     if (!allowDemoSession || runtime.createDemoSession === undefined) throw httpError(404, "not_found", "Demo session is disabled.");
     const session = await runtime.createDemoSession();
@@ -304,6 +326,12 @@ function requireInspectorRuntime(runtime: ConsoleRuntimeService): InspectorRunti
     throw httpError(503, "inspector_unavailable", "Context and memory inspection is unavailable.");
   }
   return runtime as InspectorRuntimeService;
+}
+
+function requireAdvancedInspectorRuntime(runtime: ConsoleRuntimeService): AdvancedInspectorRuntimeService {
+  const candidate = runtime as Partial<AdvancedInspectorRuntimeService>;
+  if (typeof candidate.searchArtifacts !== "function" || typeof candidate.getArtifact !== "function" || typeof candidate.listTools !== "function" || typeof candidate.listPtcExecutions !== "function" || typeof candidate.getPtcExecution !== "function" || typeof candidate.listAgents !== "function" || typeof candidate.getAgent !== "function" || typeof candidate.listTasks !== "function" || typeof candidate.getTask !== "function" || typeof candidate.taskGraph !== "function" || typeof candidate.metrics !== "function" || typeof candidate.operations !== "function") throw httpError(503, "advanced_inspector_unavailable", "Advanced runtime inspection is unavailable.");
+  return runtime as AdvancedInspectorRuntimeService;
 }
 
 function requireChatRuntime(runtime: ConsoleRuntimeService): ChatRuntimeService {

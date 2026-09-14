@@ -41,6 +41,12 @@ import {
   type MemorySourceDto,
   type HistoryMessageDto,
   type RetrievalInspectorDto,
+  artifactInspectorQuerySchema, artifactPageDtoSchema, artifactDetailDtoSchema, type ArtifactInspectorQuery, type ArtifactPageDto, type ArtifactDetailDto,
+  toolInspectorQuerySchema, toolPageDtoSchema, type ToolInspectorQuery, type ToolPageDto,
+  ptcPageDtoSchema, ptcExecutionDetailDtoSchema, type PtcPageDto, type PtcExecutionDetailDto,
+  agentPageDtoSchema, agentDetailDtoSchema, type AgentPageDto, type AgentDetailDto,
+  taskPageDtoSchema, taskDetailDtoSchema, taskGraphDtoSchema, type TaskPageDto, type TaskDetailDto, type TaskGraphDto,
+  runtimeMetricsDtoSchema, operationsDtoSchema, type RuntimeMetricsDto, type OperationsDto,
 } from "@mnemos/contracts";
 
 const baseUrl = (import.meta.env.VITE_MNEMOS_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
@@ -99,6 +105,18 @@ export const api = {
   memorySources: (memoryId: string): Promise<MemorySourceDto[]> => requestJson("/api/v1/memory/" + encodeURIComponent(memoryId) + "/sources", memorySourceDtoSchema.array()),
   historyMessage: (sessionId: string, messageId: string): Promise<HistoryMessageDto> => requestJson("/api/v1/sessions/" + encodeURIComponent(sessionId) + "/history/" + encodeURIComponent(messageId), historyMessageDtoSchema),
   retrieval: (sessionId: string, messageId: string): Promise<RetrievalInspectorDto> => requestJson("/api/v1/sessions/" + encodeURIComponent(sessionId) + "/messages/" + encodeURIComponent(messageId) + "/retrieval", retrievalInspectorDtoSchema),
+  artifacts: (query: Partial<ArtifactInspectorQuery> = {}): Promise<ArtifactPageDto> => { const parsed = artifactInspectorQuerySchema.parse(query); const params = new URLSearchParams(); for (const [key, value] of Object.entries(parsed)) if (value !== undefined && value !== "") params.set(key, String(value)); return requestJson(`/api/v1/artifacts?${params.toString()}`, artifactPageDtoSchema); },
+  artifact: (id: string, options?: { offset?: number; length?: number; query?: string }): Promise<ArtifactDetailDto> => { const params = new URLSearchParams(); if (options?.offset !== undefined) params.set("offset", String(options.offset)); if (options?.length !== undefined) params.set("length", String(options.length)); if (options?.query) params.set("query", options.query); return requestJson(`/api/v1/artifacts/${encodeURIComponent(id)}${params.toString() ? `?${params}` : ""}`, artifactDetailDtoSchema); },
+  tools: (query: Partial<ToolInspectorQuery> = {}): Promise<ToolPageDto> => { const parsed = toolInspectorQuerySchema.parse(query); const params = new URLSearchParams(); for (const [key, value] of Object.entries(parsed)) if (value !== undefined && value !== "") params.set(key, String(value)); return requestJson(`/api/v1/tools?${params}`, toolPageDtoSchema); },
+  ptc: (): Promise<PtcPageDto> => requestJson("/api/v1/ptc/executions?limit=50", ptcPageDtoSchema),
+  ptcExecution: (id: string): Promise<PtcExecutionDetailDto> => requestJson(`/api/v1/ptc/executions/${encodeURIComponent(id)}`, ptcExecutionDetailDtoSchema),
+  agents: (): Promise<AgentPageDto> => requestJson("/api/v1/agents?limit=50", agentPageDtoSchema),
+  agent: (id: string): Promise<AgentDetailDto> => requestJson(`/api/v1/agents/${encodeURIComponent(id)}`, agentDetailDtoSchema),
+  tasks: (): Promise<TaskPageDto> => requestJson("/api/v1/tasks?limit=100", taskPageDtoSchema),
+  task: (id: string): Promise<TaskDetailDto> => requestJson(`/api/v1/tasks/${encodeURIComponent(id)}`, taskDetailDtoSchema),
+  taskGraph: (rootTaskId?: string): Promise<TaskGraphDto> => requestJson(`/api/v1/tasks/graph${rootTaskId ? `?rootTaskId=${encodeURIComponent(rootTaskId)}` : ""}`, taskGraphDtoSchema),
+  metrics: (): Promise<RuntimeMetricsDto> => requestJson("/api/v1/runtime/metrics", runtimeMetricsDtoSchema),
+  operations: (): Promise<OperationsDto> => requestJson("/api/v1/runtime/operations", operationsDtoSchema),
 };
 
 export function subscribeToChatStream(sessionId: string, generationId: string, onEvent: (event: ChatStreamEventDto) => void, onStatus?: (status: "live" | "closed" | "error") => void): () => void {

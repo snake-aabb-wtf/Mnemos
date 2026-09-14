@@ -841,7 +841,9 @@ export function createRunCodeTool(runtime: PtcRuntime): ToolDefinition<RunCodeIn
     // Dispatcher cancellation remains cooperative. Give the PTC child its own
     // wall-clock deadline plus generous spawn/cleanup room so the child can be
     // killed even when the host is under load or the child is reporting OOM.
-    timeoutMs: runtime.policy.maxExecutionMs + 30_000,
+    // Windows can take tens of seconds to reap a low-memory child, so the
+    // outer dispatcher timeout must never race the sandbox's structured error.
+    timeoutMs: runtime.policy.maxExecutionMs + 60_000,
     async execute(input, context) {
       return runtime.execute(input, context);
     },

@@ -123,4 +123,18 @@ describe("Console API server", () => {
     const history = await app.inject("/api/v1/sessions/demo-session-01/history/demo-session-01-m1"); expect(history.statusCode).toBe(200); expect(history.json()).toMatchObject({ role: "user", id: "demo-session-01-m1" });
     await app.close();
   });
+
+  it("serves bounded artifact, tool, PTC, agent, task, metrics, and operations DTOs", async () => {
+    const app = await createServer({ runtime: new DemoConsoleRuntimeService("test") });
+    const artifacts = await app.inject("/api/v1/artifacts?limit=10"); expect(artifacts.statusCode).toBe(200); expect(artifacts.json().items[0]).toMatchObject({ id: "artifact://demo-research", sizeBytes: 184320 });
+    const artifact = await app.inject("/api/v1/artifacts/artifact%3A%2F%2Fdemo-research/preview"); expect(artifact.statusCode).toBe(200); expect(artifact.json().preview.content.length).toBeLessThanOrEqual(16384); expect(JSON.stringify(artifact.json())).not.toContain("secret");
+    const range = await app.inject("/api/v1/artifacts/artifact%3A%2F%2Fdemo-research/range?offset=2&length=12"); expect(range.statusCode).toBe(200); expect(range.json().range.length).toBeLessThanOrEqual(12);
+    const tools = await app.inject("/api/v1/tools?loaded=true&limit=20"); expect(tools.statusCode).toBe(200); expect(tools.json().items.some((tool: { name: string }) => tool.name === "run_code")).toBe(true);
+    const ptc = await app.inject("/api/v1/ptc/executions?limit=10"); expect(ptc.statusCode).toBe(200); const ptcDetail = await app.inject(`/api/v1/ptc/executions/${ptc.json().items[0].id}`); expect(ptcDetail.statusCode).toBe(200); expect(ptcDetail.json().timeline.length).toBeGreaterThan(0);
+    const agents = await app.inject("/api/v1/agents?limit=20"); expect(agents.statusCode).toBe(200); expect(agents.json().items.some((agent: { id: string }) => agent.id === "planner")).toBe(true);
+    const tasks = await app.inject("/api/v1/tasks?limit=20"); expect(tasks.statusCode).toBe(200); expect(tasks.json().items.length).toBeGreaterThan(3);
+    const graph = await app.inject("/api/v1/tasks/graph"); expect(graph.statusCode).toBe(200); expect(graph.json().nodes.length).toBeGreaterThan(3); expect(graph.json().edges.length).toBeGreaterThan(0);
+    expect((await app.inject("/api/v1/runtime/metrics")).json()).toMatchObject({ contextPressure: 0.287, sessions: 1 }); expect((await app.inject("/api/v1/runtime/operations")).json()).toMatchObject({ sandbox: { status: "available" }, migrations: { pending: 0 } });
+    await app.close();
+  });
 });

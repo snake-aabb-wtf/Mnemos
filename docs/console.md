@@ -1,4 +1,4 @@
-# Mnemos Web Console (Frontend F3)
+# Mnemos Web Console (Frontend F6)
 
 The console is an adapter and diagnostic surface, not a replacement for the Mnemos runtime. Canonical History,
 Memory, Artifacts, tasks, permissions, and runtime policy stay behind the server's injected runtime service.
@@ -32,7 +32,7 @@ The default test/demo server is deterministic and in-memory. `POST /api/v1/dev/d
 development/test profiles and is disabled in production. It exists only to exercise the UI and SSE chain without an
 LLM API key.
 
-## F1 API, F2 Chat API, and F3 Inspector API
+## F1–F6 API surfaces
 
 `GET /api/v1/meta`, `/health`, `/ready`, `/runtime/summary`, `/sessions`, `/sessions/:sessionId`, and `/events` remain
 the F1 observer surface. F2 adds `POST /api/v1/sessions`, `GET /api/v1/sessions/:sessionId/messages`,
@@ -56,14 +56,20 @@ contracts package. Context values are policy telemetry (not editable browser sta
 canonical History boundary. Memory records remain derived and source-traceable, and large payloads are not copied into
 the inspector.
 
+F4 adds bounded read-only endpoints for `/artifacts`, `/artifacts/:id` (preview/range/query), `/tools`, and
+`/ptc/executions`. Artifact bodies are never returned unbounded. Tool definitions are the same contracts used by native
+calling and the PTC SDK. F5 adds `/agents`, `/tasks`, `/tasks/:id`, and `/tasks/graph`; F6 adds `/runtime/metrics` and
+`/runtime/operations`. All response bodies are Zod-validated, capped DTOs: no secrets, prompts, chain-of-thought, private
+agent reasoning, raw tool arguments, or giant outputs cross the adapter boundary.
+
 ## Console pages
 
-F3 includes the F1 Overview, Sessions, Runtime Events, and Settings plus the F2 three-column Chat Workbench. The workbench
+F6 includes the F1 Overview, Sessions, Runtime Events, and Settings plus the F2 three-column Chat Workbench. The workbench
 has a session rail with New Session, canonical conversation history, streaming assistant output, safe runtime activity,
 Stop, retry/regenerate, Markdown/code rendering, and a full read-only Context Inspector with token composition,
 pressure policy, pins, compaction timeline, and retrieval explanations. The `/memory` Explorer supports bounded search,
-type/status filters, detail, timeline, confidence/reinforcement/stale fields, and Memory → History provenance links. Future areas
-are visibly marked as coming later rather than pretending to be implemented. The shell is keyboard accessible,
+type/status filters, detail, timeline, confidence/reinforcement/stale fields, and Memory → History provenance links. Artifacts,
+Tools, PTC, Agents, Tasks, and Operations are now implemented as read-only bounded pages. The shell is keyboard accessible,
 responsive from mobile through desktop, and supports system/light/dark theme preference. IDs use monospace display and
 copy controls; server timestamps are formatted in the browser's local timezone.
 
@@ -77,7 +83,8 @@ pnpm test:e2e
 
 Playwright uses Chromium and starts the built Fastify server plus Vite. The smoke path proves Browser → REST → runtime
 fixture → EventBus → SSE → React, entirely offline. F2 E2E covers session creation, streaming, refresh recovery, and
-true cancellation; F3 E2E covers Context/Compaction inspection and Memory provenance navigation. CI installs Chromium
+true cancellation; F3 E2E covers Context/Compaction inspection and Memory provenance navigation; F4–F6 coverage includes
+artifact/tool/PTC, task graph, dashboard metrics, operations, mobile layout, and bounded previews. CI installs Chromium
 explicitly. Canonical messages are always read back from the runtime API.
 
 ## Security and roadmap
@@ -91,6 +98,6 @@ runtime lifecycle owner. F1–F6 are intentionally staged:
 | F1 | Complete | Console foundation, REST/SSE, runtime overview, sessions, events, tests |
 | F2 | Complete | Chat workbench, streaming, cancellation, retry, Markdown, activity summary, E2E |
 | F3 | Complete | Context telemetry, compaction timeline, Memory Explorer, retrieval and History provenance |
-| F4 | Pending | Artifacts, tools, and PTC inspector |
-| F5 | Pending | Multi-agent task graph |
-| F6 | Pending | Runtime dashboard, UX polish, expanded E2E |
+| F4 | Complete | Artifacts, tools, and PTC inspector |
+| F5 | Complete | Multi-agent task graph, task/agent event refresh |
+| F6 | Complete | Runtime dashboard, operations, UX polish, expanded E2E |

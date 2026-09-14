@@ -276,6 +276,73 @@ export type RetrievalResultDto = z.infer<typeof retrievalResultDtoSchema>;
 export const retrievalInspectorDtoSchema = z.object({ sessionId: z.string().min(1), messageId: z.string().min(1), query: z.string().max(4_000), results: z.array(retrievalResultDtoSchema).max(20), total: z.number().int().nonnegative() }).strict();
 export type RetrievalInspectorDto = z.infer<typeof retrievalInspectorDtoSchema>;
 
+// F4–F6 read-only Console contracts. These DTOs intentionally expose bounded
+// metadata and references, never raw tool output, prompts, secrets, or hidden
+// reasoning. Production adapters map their stores into the same shapes.
+export const artifactSummaryDtoSchema = z.object({
+  id: z.string().min(1).max(256), type: z.string().min(1).max(128), mimeType: z.string().max(255).optional(),
+  sizeBytes: z.number().int().nonnegative(), checksum: z.string().max(256).optional(), createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(), createdBy: z.string().max(128).optional(), sessionId: z.string().max(256).optional(),
+  taskId: z.string().max(256).optional(), agentId: z.string().max(256).optional(), scope: z.enum(["session", "persistent"]),
+  expiresAt: z.string().datetime().optional(), summary: z.string().max(512).optional(), provenance: z.object({ sourceCount: z.number().int().nonnegative().max(100_000), representativeRefs: z.array(z.string().max(256)).max(12) }).strict().optional(),
+}).strict();
+export type ArtifactSummaryDto = z.infer<typeof artifactSummaryDtoSchema>;
+export const artifactPageDtoSchema = z.object({ items: z.array(artifactSummaryDtoSchema).max(100), nextCursor: z.string().min(1).optional(), total: z.number().int().nonnegative() }).strict();
+export type ArtifactPageDto = z.infer<typeof artifactPageDtoSchema>;
+export const artifactQueryDtoSchema = z.object({ artifactId: z.string().min(1), byteOffset: z.number().int().nonnegative(), lineNumber: z.number().int().positive(), preview: z.string().max(2_000) }).strict();
+export type ArtifactQueryDto = z.infer<typeof artifactQueryDtoSchema>;
+export const artifactDetailDtoSchema = artifactSummaryDtoSchema.extend({ preview: z.object({ encoding: z.enum(["utf8", "json", "binary"]), content: z.string().max(16_384), truncated: z.boolean() }).strict().optional(), range: z.object({ offset: z.number().int().nonnegative(), length: z.number().int().nonnegative(), content: z.string().max(16_384), truncated: z.boolean() }).strict().optional(), queryMatches: z.array(artifactQueryDtoSchema).max(50).optional() }).strict();
+export type ArtifactDetailDto = z.infer<typeof artifactDetailDtoSchema>;
+export const artifactInspectorQuerySchema = paginationQuerySchema.extend({ query: z.string().trim().max(240).default(""), mimeType: z.string().trim().max(255).optional(), sessionId: z.string().trim().max(256).optional(), taskId: z.string().trim().max(256).optional(), agentId: z.string().trim().max(256).optional() }).strict();
+export type ArtifactInspectorQuery = z.infer<typeof artifactInspectorQuerySchema>;
+
+export const toolSummaryDtoSchema = z.object({ name: z.string().min(1).max(256), namespace: z.string().min(1).max(128), description: z.string().max(1_000), permissions: z.array(z.string().max(128)).max(32), sideEffect: z.enum(["read", "write", "destructive"]), concurrencySafe: z.boolean(), schema: z.record(z.string(), z.unknown()), schemaTokens: z.number().int().nonnegative(), loaded: z.boolean(), internal: z.boolean(), discovery: z.object({ source: z.enum(["core", "dynamic", "ptc"]), matchedBy: z.array(z.string().max(64)).max(12).optional(), lastLoadedAt: z.string().datetime().optional() }).strict() }).strict();
+export type ToolSummaryDto = z.infer<typeof toolSummaryDtoSchema>;
+export const toolPageDtoSchema = z.object({ items: z.array(toolSummaryDtoSchema).max(100), nextCursor: z.string().min(1).optional(), total: z.number().int().nonnegative(), loadedCount: z.number().int().nonnegative() }).strict();
+export type ToolPageDto = z.infer<typeof toolPageDtoSchema>;
+export const toolInspectorQuerySchema = paginationQuerySchema.extend({ query: z.string().trim().max(240).default(""), namespace: z.string().trim().max(128).optional(), loaded: z.coerce.boolean().optional() }).strict();
+export type ToolInspectorQuery = z.infer<typeof toolInspectorQuerySchema>;
+
+export const ptcTimelineEventDtoSchema = z.object({ id: z.string().min(1), atMs: z.number().int().nonnegative(), kind: z.enum(["started", "tool_started", "tool_completed", "barrier", "completed", "failed"]), label: z.string().max(240), toolName: z.string().max(256).optional(), sideEffect: z.enum(["read", "write", "destructive"]).optional(), concurrency: z.number().int().nonnegative().optional(), durationMs: z.number().int().nonnegative().optional(), status: z.enum(["running", "completed", "failed"]).optional() }).strict();
+export type PtcTimelineEventDto = z.infer<typeof ptcTimelineEventDtoSchema>;
+export const ptcExecutionSummaryDtoSchema = z.object({ id: z.string().min(1), sessionId: z.string().min(1), agentId: z.string().min(1), taskId: z.string().max(256).optional(), status: z.enum(["running", "completed", "failed", "cancelled"]), startedAt: z.string().datetime(), completedAt: z.string().datetime().optional(), durationMs: z.number().int().nonnegative(), toolCalls: z.number().int().nonnegative(), peakConcurrency: z.number().int().nonnegative(), artifactSpills: z.number().int().nonnegative(), quotaUsed: z.number().int().nonnegative(), quotaLimit: z.number().int().positive(), failureCode: z.string().max(128).optional(), finalResultKind: z.enum(["inline", "artifact", "none"]).optional() }).strict();
+export type PtcExecutionSummaryDto = z.infer<typeof ptcExecutionSummaryDtoSchema>;
+export const ptcExecutionDetailDtoSchema = ptcExecutionSummaryDtoSchema.extend({ codePreview: z.string().max(1_000).optional(), timeline: z.array(ptcTimelineEventDtoSchema).max(500), resultPreview: z.string().max(4_000).optional(), artifactIds: z.array(z.string().max(256)).max(50), permissions: z.array(z.string().max(128)).max(32) }).strict();
+export type PtcExecutionDetailDto = z.infer<typeof ptcExecutionDetailDtoSchema>;
+export const ptcPageDtoSchema = z.object({ items: z.array(ptcExecutionSummaryDtoSchema).max(100), nextCursor: z.string().min(1).optional(), total: z.number().int().nonnegative() }).strict();
+export type PtcPageDto = z.infer<typeof ptcPageDtoSchema>;
+
+export const agentSummaryDtoSchema = z.object({ id: z.string().min(1), name: z.string().min(1).max(128), role: z.string().max(128), status: z.enum(["idle", "running", "waiting", "completed", "failed", "cancelled"]), sessionId: z.string().max(256).optional(), taskId: z.string().max(256).optional(), modelProfile: z.string().max(128), contextLimitTokens: z.number().int().positive(), permissions: z.array(z.string().max(128)).max(64), toolCount: z.number().int().nonnegative(), ptcEnabled: z.boolean(), tokensUsed: z.number().int().nonnegative(), durationMs: z.number().int().nonnegative(), budget: z.object({ maxModelCalls: z.number().int().nonnegative(), maxToolCalls: z.number().int().nonnegative(), maxPtcExecutions: z.number().int().nonnegative(), maxChildTasks: z.number().int().nonnegative(), maxTokens: z.number().int().nonnegative() }).strict(), delegationDepth: z.number().int().nonnegative(), retryCount: z.number().int().nonnegative() }).strict();
+export type AgentSummaryDto = z.infer<typeof agentSummaryDtoSchema>;
+export const agentDetailDtoSchema = agentSummaryDtoSchema.extend({ instructionsPreview: z.string().max(512), objective: z.string().max(1_000).optional(), loadedToolNames: z.array(z.string().max(256)).max(100), artifactIds: z.array(z.string().max(256)).max(50), memoryRefs: z.array(z.string().max(256)).max(50), localStateKeys: z.array(z.string().max(128)).max(100) }).strict();
+export type AgentDetailDto = z.infer<typeof agentDetailDtoSchema>;
+export const agentPageDtoSchema = z.object({ items: z.array(agentSummaryDtoSchema).max(100), nextCursor: z.string().min(1).optional(), total: z.number().int().nonnegative() }).strict();
+export type AgentPageDto = z.infer<typeof agentPageDtoSchema>;
+
+export const taskStatusDtoSchema = z.enum(["pending", "running", "waiting", "completed", "failed", "cancelled", "blocked"]);
+export const taskSummaryDtoSchema = z.object({ id: z.string().min(1), parentTaskId: z.string().max(256).optional(), sessionId: z.string().min(1), createdBy: z.string().min(1), assignedAgentId: z.string().max(256).optional(), objective: z.string().max(1_000), status: taskStatusDtoSchema, createdAt: z.string().datetime(), updatedAt: z.string().datetime(), dependencyIds: z.array(z.string().max(256)).max(100), childTaskIds: z.array(z.string().max(256)).max(100), outputRefs: z.array(z.string().max(256)).max(50), retryCount: z.number().int().nonnegative(), reviewIteration: z.number().int().nonnegative(), durationMs: z.number().int().nonnegative() }).strict();
+export type TaskSummaryDto = z.infer<typeof taskSummaryDtoSchema>;
+export const taskDetailDtoSchema = taskSummaryDtoSchema.extend({ inputPreview: z.string().max(2_000).optional(), outputPreview: z.string().max(4_000).optional(), sharedState: z.record(z.string(), z.unknown()), localSummary: z.string().max(2_000).optional(), handoffs: z.array(z.object({ id: z.string(), senderAgentId: z.string(), receiverAgentId: z.string(), summary: z.string().max(1_000), artifactRefs: z.array(z.string().max(256)).max(50), memoryRefs: z.array(z.string().max(256)).max(50), createdAt: z.string().datetime() }).strict()).max(100), failure: z.object({ code: z.string().max(128), message: z.string().max(512) }).strict().optional() }).strict();
+export type TaskDetailDto = z.infer<typeof taskDetailDtoSchema>;
+export const taskPageDtoSchema = z.object({ items: z.array(taskSummaryDtoSchema).max(100), nextCursor: z.string().min(1).optional(), total: z.number().int().nonnegative() }).strict();
+export type TaskPageDto = z.infer<typeof taskPageDtoSchema>;
+export const taskGraphNodeDtoSchema = z.object({ id: z.string(), type: z.enum(["task", "agent", "result"]), label: z.string().max(180), status: z.string().max(64), role: z.string().max(128).optional(), agentId: z.string().max(256).optional(), taskId: z.string().max(256).optional(), position: z.object({ x: z.number(), y: z.number() }).strict() }).strict();
+export type TaskGraphNodeDto = z.infer<typeof taskGraphNodeDtoSchema>;
+export const taskGraphEdgeDtoSchema = z.object({ id: z.string(), source: z.string(), target: z.string(), kind: z.enum(["dependency", "delegation", "handoff", "review", "result"]) }).strict();
+export type TaskGraphEdgeDto = z.infer<typeof taskGraphEdgeDtoSchema>;
+export const taskGraphDtoSchema = z.object({ rootTaskId: z.string(), nodes: z.array(taskGraphNodeDtoSchema).max(500), edges: z.array(taskGraphEdgeDtoSchema).max(1_000), generatedAt: z.string().datetime() }).strict();
+export type TaskGraphDto = z.infer<typeof taskGraphDtoSchema>;
+
+export const metricPointDtoSchema = z.object({ at: z.string().datetime(), value: z.number().finite() }).strict();
+export const runtimeMetricsDtoSchema = z.object({ generatedAt: z.string().datetime(), requestsTotal: z.number().int().nonnegative(), modelCalls: z.number().int().nonnegative(), providerFailures: z.number().int().nonnegative(), contextPressure: z.number().min(0).max(1), compactions: z.number().int().nonnegative(), memoryConsolidations: z.number().int().nonnegative(), retrievalLatencyMs: z.number().nonnegative().optional(), toolCalls: z.number().int().nonnegative(), ptcExecutions: z.number().int().nonnegative(), artifactSpills: z.number().int().nonnegative(), queueDepth: z.number().int().nonnegative(), activeWorkers: z.number().int().nonnegative(), sessions: z.number().int().nonnegative(), activeAgents: z.number().int().nonnegative(), activeTasks: z.number().int().nonnegative(), series: z.object({ requests: z.array(metricPointDtoSchema).max(60), pressure: z.array(metricPointDtoSchema).max(60), queue: z.array(metricPointDtoSchema).max(60) }).strict() }).strict();
+export type RuntimeMetricsDto = z.infer<typeof runtimeMetricsDtoSchema>;
+export const workerSummaryDtoSchema = z.object({ id: z.string(), status: z.enum(["idle", "running", "stopped", "draining"]), currentJobId: z.string().optional(), completedJobs: z.number().int().nonnegative(), failedJobs: z.number().int().nonnegative(), heartbeatAt: z.string().datetime() }).strict();
+export type WorkerSummaryDto = z.infer<typeof workerSummaryDtoSchema>;
+export const jobSummaryDtoSchema = z.object({ id: z.string(), type: z.string(), status: z.enum(["pending", "running", "completed", "failed"]), attempts: z.number().int().nonnegative(), availableAt: z.string().datetime(), leaseUntil: z.string().datetime().optional(), workerId: z.string().optional(), createdAt: z.string().datetime() }).strict();
+export type JobSummaryDto = z.infer<typeof jobSummaryDtoSchema>;
+export const operationsDtoSchema = z.object({ generatedAt: z.string().datetime(), health: healthDtoSchema, readiness: readinessDtoSchema, workers: z.array(workerSummaryDtoSchema).max(100), jobs: z.array(jobSummaryDtoSchema).max(100), storage: z.object({ databaseBytes: z.number().int().nonnegative().optional(), memoryCount: z.number().int().nonnegative(), artifactCount: z.number().int().nonnegative(), auditRows: z.number().int().nonnegative().optional() }).strict(), migrations: z.object({ schemaVersion: z.number().int().nonnegative(), pending: z.number().int().nonnegative() }).strict(), sandbox: z.object({ backend: z.string().max(128), status: z.enum(["available", "unavailable", "degraded"]), capabilities: z.array(z.string().max(64)).max(32) }).strict(), provider: z.object({ status: z.enum(["available", "degraded", "unavailable"]), names: z.array(z.string().max(128)).max(20) }).strict(), audit: z.object({ rows: z.number().int().nonnegative(), retention: z.string().max(128) }).strict() }).strict();
+export type OperationsDto = z.infer<typeof operationsDtoSchema>;
+
 export const runtimeEventTypeSchema = z.enum([
   "runtime.started", "runtime.ready", "runtime.shutting_down", "runtime.stopped",
   "message.received", "message.generated",

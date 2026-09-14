@@ -1,22 +1,29 @@
 import React, { type JSX } from "react";
 import { createRootRoute, createRoute, createRouter, Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
-import { Activity, ArrowLeft, Check, ChevronRight, CircleHelp, Copy, Database, ExternalLink, LayoutDashboard, Menu, Moon, PanelLeft, Radio, Search, Send, Settings, Square, Sun, X } from "lucide-react";
+import { Activity, ArrowLeft, Check, ChevronRight, CircleHelp, Copy, Database, ExternalLink, GitBranch, LayoutDashboard, Menu, Moon, PanelLeft, Radio, Search, Send, Settings, Square, Sun, X, FileArchive, Wrench, Code2, Network } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiClientError, subscribeToChatStream, subscribeToEvents } from "./lib/api";
 import { formatDate, formatNumber, formatRelative } from "./lib/format";
 import { useUiStore, type ThemePreference } from "./lib/ui-store";
 import { Badge, Button, Card, CardBody, CardHeader, CopyableId, EmptyState, ErrorState, Label, Skeleton, StatusBadge, StatusDot } from "./components/ui";
 import type { ChatActivity, ChatMessageDto, ChatStreamEventDto, ContextInspectorDto, RetrievalInspectorDto, RuntimeEventDto, SessionSummaryDto } from "@mnemos/contracts";
+import { AgentsPage, ArtifactsPage, DashboardPage, OperationsPage, PtcPage, TasksPage, ToolsPage } from "./advanced";
 
 const rootRoute = createRootRoute({ component: AppShell, notFoundComponent: NotFoundPage });
-const overviewRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: OverviewPage });
+const overviewRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: DashboardPage });
 const sessionsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/sessions", component: SessionsPage });
 const sessionRoute = createRoute({ getParentRoute: () => rootRoute, path: "/sessions/$sessionId", component: SessionPage });
 const historyRoute = createRoute({ getParentRoute: () => rootRoute, path: "/sessions/$sessionId/history/$messageId", component: HistorySourcePage });
 const memoryRoute = createRoute({ getParentRoute: () => rootRoute, path: "/memory", component: MemoryPage });
 const eventsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/events", component: EventsPage });
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage });
-const routeTree = rootRoute.addChildren([overviewRoute, sessionsRoute, sessionRoute, historyRoute, memoryRoute, eventsRoute, settingsRoute]);
+const artifactsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/artifacts", component: ArtifactsPage });
+const toolsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/tools", component: ToolsPage });
+const ptcRoute = createRoute({ getParentRoute: () => rootRoute, path: "/ptc", component: PtcPage });
+const agentsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/agents", component: AgentsPage });
+const tasksRoute = createRoute({ getParentRoute: () => rootRoute, path: "/tasks", component: TasksPage });
+const operationsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/operations", component: OperationsPage });
+const routeTree = rootRoute.addChildren([overviewRoute, sessionsRoute, sessionRoute, historyRoute, memoryRoute, eventsRoute, settingsRoute, artifactsRoute, toolsRoute, ptcRoute, agentsRoute, tasksRoute, operationsRoute]);
 export const router = createRouter({ routeTree, defaultPreload: "intent" });
 declare module "@tanstack/react-router" { interface Register { router: typeof router; } }
 
@@ -29,7 +36,7 @@ export function AppShell(): JSX.Element {
   return <div className="min-h-screen bg-canvas text-ink">
     <aside className={`fixed inset-y-0 left-0 z-30 flex w-64 flex-col border-r border-line bg-panel transition-transform duration-200 lg:translate-x-0 ${collapsed ? "lg:w-[72px]" : ""} ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}>
       <div className="flex h-16 items-center justify-between border-b border-line px-4"><Link to="/" className="flex items-center gap-3 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/80" onClick={() => setMobileOpen(false)}><span className="grid h-8 w-8 place-items-center rounded-md bg-ink text-sm font-black tracking-[-0.1em] text-amber-300">M·</span>{!collapsed ? <span><span className="block text-sm font-bold tracking-tight">Mnemos</span><span className="block text-[10px] uppercase tracking-[0.2em] text-ink-muted">Runtime console</span></span> : null}</Link><button type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} className="rounded-md p-2 text-ink-muted hover:bg-ink/5 lg:hidden"><X size={18} /></button></div>
-      <nav aria-label="Primary" className="flex-1 space-y-1 px-3 py-5"><NavItem to="/" label="Overview" icon={<LayoutDashboard size={17} />} collapsed={collapsed} onNavigate={() => setMobileOpen(false)} /><NavItem to="/sessions" label="Sessions" icon={<Database size={17} />} collapsed={collapsed} onNavigate={() => setMobileOpen(false)} /><NavItem to="/memory" label="Memory" icon={<Search size={17} />} collapsed={collapsed} onNavigate={() => setMobileOpen(false)} /><NavItem to="/events" label="Events" icon={<Radio size={17} />} collapsed={collapsed} onNavigate={() => setMobileOpen(false)} /><div className={`pb-2 pt-8 ${collapsed ? "hidden" : ""}`}><Label>Coming later</Label></div><FutureItem label="Artifacts" collapsed={collapsed} /><FutureItem label="Tools & PTC" collapsed={collapsed} /><FutureItem label="Agents & Tasks" collapsed={collapsed} /></nav>
+      <nav aria-label="Primary" className="flex-1 space-y-1 overflow-y-auto px-3 py-5"><NavItem to="/" label="Overview" icon={<LayoutDashboard size={17} />} collapsed={collapsed} onNavigate={() => setMobileOpen(false)} /><NavItem to="/sessions" label="Sessions" icon={<Database size={17} />} collapsed={collapsed} onNavigate={() => setMobileOpen(false)} /><NavItem to="/memory" label="Memory" icon={<Search size={17} />} collapsed={collapsed} onNavigate={() => setMobileOpen(false)} /><NavItem to="/artifacts" label="Artifacts" icon={<FileArchive size={17} />} collapsed={collapsed} onNavigate={() => setMobileOpen(false)} /><NavItem to="/tools" label="Tools" icon={<Wrench size={17} />} collapsed={collapsed} onNavigate={() => setMobileOpen(false)} /><NavItem to="/ptc" label="PTC" icon={<Code2 size={17} />} collapsed={collapsed} onNavigate={() => setMobileOpen(false)} /><NavItem to="/agents" label="Agents" icon={<Network size={17} />} collapsed={collapsed} onNavigate={() => setMobileOpen(false)} /><NavItem to="/tasks" label="Tasks" icon={<GitBranch size={17} />} collapsed={collapsed} onNavigate={() => setMobileOpen(false)} /><NavItem to="/operations" label="Operations" icon={<Activity size={17} />} collapsed={collapsed} onNavigate={() => setMobileOpen(false)} /><NavItem to="/events" label="Events" icon={<Radio size={17} />} collapsed={collapsed} onNavigate={() => setMobileOpen(false)} /></nav>
       <div className="border-t border-line p-3"><NavItem to="/settings" label="Settings" icon={<Settings size={17} />} collapsed={collapsed} onNavigate={() => setMobileOpen(false)} />{!collapsed ? <div className="mt-3 rounded-lg bg-canvas px-3 py-3"><div className="flex items-center gap-2"><StatusDot status={runtimeStatus} /><span className="text-xs font-semibold">{runtimeStatus === "ready" ? "Runtime ready" : runtimeStatus === "not_ready" ? "Runtime unavailable" : "Connecting"}</span></div><p className="mt-1 text-[11px] text-ink-muted">Console · F3</p></div> : null}</div>
     </aside>
     {mobileOpen ? <button type="button" aria-label="Close navigation overlay" className="fixed inset-0 z-20 bg-black/30 lg:hidden" onClick={() => setMobileOpen(false)} /> : null}

@@ -61,3 +61,32 @@ test("inspects context compaction and traces memory back to canonical History", 
   await page.goto("about:blank", { waitUntil: "commit", timeout: 5_000 });
   await page.close();
 });
+
+test("inspects artifacts, shared tools, and a PTC timeline with bounded previews", async ({ page }) => {
+  await page.goto("/artifacts", { waitUntil: "commit", timeout: 10_000 });
+  await expect(page.getByRole("heading", { name: "Inspect externalized work without loading it all." })).toBeVisible();
+  await expect(page.getByText("Bounded research report; use range reads for the body.", { exact: true })).toBeVisible();
+  await page.getByText("Bounded research report; use range reads for the body.", { exact: true }).click();
+  await expect(page.getByText("Bounded range", { exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Tools", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "One catalog, two execution paths." })).toBeVisible();
+  await expect(page.getByText("memory.search", { exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "PTC", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Programmatic calls, without private reasoning." })).toBeVisible();
+  await expect(page.getByText("PTC timeline", { exact: true })).toBeVisible();
+});
+
+test("shows the multi-agent task graph and runtime dashboard on mobile", async ({ page }) => {
+  await page.goto("/tasks", { waitUntil: "commit", timeout: 10_000 });
+  await expect(page.getByRole("heading", { name: "See delegation as a graph, not a transcript." })).toBeVisible();
+  await expect(page.getByText("Bounded orchestration workspace", { exact: true })).toBeVisible();
+  await expect(page.getByText("task-demo-root", { exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Overview", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "A live view of your cognitive runtime." })).toBeVisible();
+  await expect(page.getByText("Requests, pressure, queue", { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await expect(page.getByRole("link", { name: "Operations", exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Operations", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Readiness, workers, storage, and sandbox boundaries." })).toBeVisible();
+});

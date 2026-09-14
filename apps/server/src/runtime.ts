@@ -8,6 +8,12 @@ import {
   contextInspectorDtoSchema, memoryDetailDtoSchema, memoryInspectorQuerySchema, memoryPageDtoSchema, memorySourceDtoSchema,
   historyMessageDtoSchema, retrievalInspectorDtoSchema, type ContextInspectorDto, type MemoryDetailDto, type MemoryInspectorQuery,
   type MemoryPageDto, type MemorySourceDto, type HistoryMessageDto, type RetrievalInspectorDto, type MemorySummaryDto,
+  artifactPageDtoSchema, artifactDetailDtoSchema, artifactInspectorQuerySchema, type ArtifactPageDto, type ArtifactDetailDto, type ArtifactInspectorQuery, type ArtifactSummaryDto,
+  toolPageDtoSchema, toolInspectorQuerySchema, type ToolPageDto, type ToolInspectorQuery, type ToolSummaryDto,
+  ptcPageDtoSchema, ptcExecutionDetailDtoSchema, type PtcPageDto, type PtcExecutionDetailDto, type PtcExecutionSummaryDto,
+  agentPageDtoSchema, agentDetailDtoSchema, type AgentPageDto, type AgentDetailDto, type AgentSummaryDto,
+  taskPageDtoSchema, taskDetailDtoSchema, taskGraphDtoSchema, type TaskPageDto, type TaskDetailDto, type TaskGraphDto, type TaskSummaryDto,
+  runtimeMetricsDtoSchema, operationsDtoSchema, type RuntimeMetricsDto, type OperationsDto, type WorkerSummaryDto, type JobSummaryDto,
 } from "@mnemos/contracts";
 
 export interface SessionQuery { limit: number; cursor?: string; }
@@ -42,6 +48,21 @@ export interface InspectorRuntimeService extends ChatRuntimeService {
   retrievalInspector(sessionId: string, messageId: string): Promise<RetrievalInspectorDto | undefined>;
 }
 
+export interface AdvancedInspectorRuntimeService extends InspectorRuntimeService {
+  searchArtifacts(query: ArtifactInspectorQuery): Promise<ArtifactPageDto>;
+  getArtifact(id: string, options?: { offset?: number; length?: number; query?: string }): Promise<ArtifactDetailDto | undefined>;
+  listTools(query: ToolInspectorQuery): Promise<ToolPageDto>;
+  listPtcExecutions(query?: SessionQuery): Promise<PtcPageDto>;
+  getPtcExecution(id: string): Promise<PtcExecutionDetailDto | undefined>;
+  listAgents(query?: SessionQuery): Promise<AgentPageDto>;
+  getAgent(id: string): Promise<AgentDetailDto | undefined>;
+  listTasks(query?: SessionQuery): Promise<TaskPageDto>;
+  getTask(id: string): Promise<TaskDetailDto | undefined>;
+  taskGraph(rootTaskId?: string): Promise<TaskGraphDto>;
+  metrics(): Promise<RuntimeMetricsDto>;
+  operations(): Promise<OperationsDto>;
+}
+
 interface DemoSession { summary: SessionSummaryDto; messages: ChatMessageDto[]; }
 interface Generation {
   sessionId: string; id: string; assistantMessageId: string; controller: AbortController;
@@ -51,7 +72,7 @@ interface Generation {
 /** Deterministic offline runtime used by the Console demo and E2E suite. It
  * lives behind the same boundary as a real Harness adapter, so HTTP never
  * owns the agent loop or canonical message state. */
-export class DemoConsoleRuntimeService implements InspectorRuntimeService {
+export class DemoConsoleRuntimeService implements AdvancedInspectorRuntimeService {
   readonly events = new EventBus<HarnessEventMap>();
   readonly health: RuntimeHealthService;
   private readonly startedAt = Date.now();
@@ -61,6 +82,15 @@ export class DemoConsoleRuntimeService implements InspectorRuntimeService {
   private readonly memories = new Map<string, MemorySummaryDto>();
   private readonly memorySourcesById = new Map<string, MemorySourceDto[]>();
   private readonly retrievalByMessage = new Map<string, RetrievalInspectorDto>();
+  private readonly artifacts = new Map<string, ArtifactSummaryDto>();
+  private readonly tools = new Map<string, ToolSummaryDto>();
+  private readonly ptcExecutions = new Map<string, PtcExecutionDetailDto>();
+  private readonly agents = new Map<string, AgentDetailDto>();
+  private readonly tasks = new Map<string, TaskDetailDto>();
+  private requestCount = 0;
+  private toolCallCount = 0;
+  private ptcCount = 0;
+  private readonly metricSeries = { requests: [] as { at: string; value: number }[], pressure: [] as { at: string; value: number }[], queue: [] as { at: string; value: number }[] };
 
   constructor(private readonly profile: "development" | "test" = "test") {
     this.health = new RuntimeHealthService([
@@ -72,12 +102,13 @@ export class DemoConsoleRuntimeService implements InspectorRuntimeService {
     ], "0.1.0");
     this.seed("demo-session-01", "Console smoke session");
     this.seedInspectorFixtures("demo-session-01");
+    this.seedAdvancedFixtures("demo-session-01");
   }
 
   async meta(): Promise<MetaDto> { return metaDtoSchema.parse({ version: "0.1.0", apiVersion: "v1", schemaVersion: 1, serverTime: new Date().toISOString() }); }
   async summary(): Promise<RuntimeSummaryDto> {
     const activeSessions = [...this.sessions.values()].filter((session) => session.summary.status === "active").length;
-    return runtimeSummaryDtoSchema.parse({ status: "ready", version: "0.1.0", uptimeSeconds: Math.floor((Date.now() - this.startedAt) / 1000), sessionsCount: this.sessions.size, activeSessions, registeredAgents: 6, activeAgents: 0, queuedJobs: 0, runningPtcExecutions: [...this.generations.values()].filter((generation) => !generation.done).length, memoryCount: 0, artifactCount: 0, contextLimitTokens: 131_072, sandboxBackend: "demo", sandboxStatus: "available", profile: this.profile });
+    return runtimeSummaryDtoSchema.parse({ status: "ready", version: "0.1.0", uptimeSeconds: Math.floor((Date.now() - this.startedAt) / 1000), sessionsCount: this.sessions.size, activeSessions, registeredAgents: this.agents.size, activeAgents: [...this.agents.values()].filter((agent) => agent.status === "running").length, queuedJobs: [...this.tasks.values()].filter((task) => task.status === "pending").length, runningPtcExecutions: [...this.ptcExecutions.values()].filter((execution) => execution.status === "running").length, memoryCount: this.memories.size, artifactCount: this.artifacts.size, contextLimitTokens: 131_072, sandboxBackend: "demo", sandboxStatus: "available", profile: this.profile });
   }
   async listSessions(query: SessionQuery): Promise<SessionPageDto> {
     const sessions = [...this.sessions.values()].map((entry) => entry.summary).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -143,7 +174,69 @@ export class DemoConsoleRuntimeService implements InspectorRuntimeService {
     return structuredClone(this.retrievalByMessage.get(`${sessionId}:${messageId}`) ?? { sessionId, messageId, query: "", results: [], total: 0 });
   }
 
+  async searchArtifacts(input: ArtifactInspectorQuery): Promise<ArtifactPageDto> {
+    const query = artifactInspectorQuerySchema.parse(input); const needle = query.query.toLowerCase();
+    const rows = [...this.artifacts.values()].filter((artifact) => (!needle || `${artifact.id} ${artifact.type} ${artifact.summary ?? ""}`.toLowerCase().includes(needle)) && (!query.mimeType || artifact.mimeType === query.mimeType) && (!query.sessionId || artifact.sessionId === query.sessionId) && (!query.taskId || artifact.taskId === query.taskId) && (!query.agentId || artifact.agentId === query.agentId));
+    const offset = decodeCursor(query.cursor); const items = rows.slice(offset, offset + query.limit); const next = offset + items.length;
+    return artifactPageDtoSchema.parse({ items, total: rows.length, ...(next < rows.length ? { nextCursor: encodeCursor(next) } : {}) });
+  }
+
+  async getArtifact(id: string, options: { offset?: number; length?: number; query?: string } = {}): Promise<ArtifactDetailDto | undefined> {
+    const artifact = this.artifacts.get(id); if (!artifact) return undefined;
+    const content = id.endsWith("json") ? JSON.stringify({ artifact: id, rows: ["bounded", "preview", "only"] }, null, 2) : "Mnemos artifact preview. This body is intentionally bounded by the inspector contract.\nline: runtime metadata\nline: source references remain in the canonical store.";
+    const offset = Math.max(0, options.offset ?? 0); const length = Math.min(16_384, Math.max(0, options.length ?? 4_096)); const raw = content.slice(offset, offset + length);
+    const matches = options.query ? content.split("\n").map((line, index) => line.toLowerCase().includes(options.query!.toLowerCase()) ? { artifactId: id, byteOffset: content.indexOf(line), lineNumber: index + 1, preview: boundedText(line, 2_000) } : undefined).filter((value): value is { artifactId: string; byteOffset: number; lineNumber: number; preview: string } => value !== undefined).slice(0, 50) : undefined;
+    return artifactDetailDtoSchema.parse({ ...artifact, preview: { encoding: artifact.mimeType === "application/json" ? "json" : "utf8", content: boundedText(content, 16_384), truncated: content.length > 16_384 }, range: { offset, length: raw.length, content: raw, truncated: offset + raw.length < content.length }, ...(matches ? { queryMatches: matches } : {}) });
+  }
+
+  async listTools(input: ToolInspectorQuery): Promise<ToolPageDto> {
+    const query = toolInspectorQuerySchema.parse(input); const needle = query.query.toLowerCase();
+    const rows = [...this.tools.values()].filter((tool) => (!needle || `${tool.name} ${tool.description} ${tool.namespace}`.toLowerCase().includes(needle)) && (!query.namespace || tool.namespace === query.namespace) && (query.loaded === undefined || tool.loaded === query.loaded));
+    const offset = decodeCursor(query.cursor); const items = rows.slice(offset, offset + query.limit); const next = offset + items.length;
+    return toolPageDtoSchema.parse({ items, total: rows.length, loadedCount: rows.filter((tool) => tool.loaded).length, ...(next < rows.length ? { nextCursor: encodeCursor(next) } : {}) });
+  }
+  async listPtcExecutions(query: SessionQuery = { limit: 25 }): Promise<PtcPageDto> { const rows = [...this.ptcExecutions.values()].map(({ timeline: _timeline, codePreview: _codePreview, resultPreview: _resultPreview, artifactIds: _artifactIds, permissions: _permissions, ...summary }) => summary); const offset = decodeCursor(query.cursor); const items = rows.slice(offset, offset + query.limit); const next = offset + items.length; return ptcPageDtoSchema.parse({ items, total: rows.length, ...(next < rows.length ? { nextCursor: encodeCursor(next) } : {}) }); }
+  async getPtcExecution(id: string): Promise<PtcExecutionDetailDto | undefined> { const value = this.ptcExecutions.get(id); return value ? structuredClone(value) : undefined; }
+  async listAgents(query: SessionQuery = { limit: 50 }): Promise<AgentPageDto> { const rows = [...this.agents.values()].map(({ instructionsPreview: _instructions, objective: _objective, loadedToolNames: _loaded, artifactIds: _artifacts, memoryRefs: _memory, localStateKeys: _state, ...summary }) => summary); const offset = decodeCursor(query.cursor); const items = rows.slice(offset, offset + query.limit); const next = offset + items.length; return agentPageDtoSchema.parse({ items, total: rows.length, ...(next < rows.length ? { nextCursor: encodeCursor(next) } : {}) }); }
+  async getAgent(id: string): Promise<AgentDetailDto | undefined> { const value = this.agents.get(id); return value ? structuredClone(value) : undefined; }
+  async listTasks(query: SessionQuery = { limit: 100 }): Promise<TaskPageDto> { const rows = [...this.tasks.values()].map(({ inputPreview: _input, outputPreview: _output, sharedState: _state, localSummary: _summary, handoffs: _handoffs, failure: _failure, ...summary }) => summary); const offset = decodeCursor(query.cursor); const items = rows.slice(offset, offset + query.limit); const next = offset + items.length; return taskPageDtoSchema.parse({ items, total: rows.length, ...(next < rows.length ? { nextCursor: encodeCursor(next) } : {}) }); }
+  async getTask(id: string): Promise<TaskDetailDto | undefined> { const value = this.tasks.get(id); return value ? structuredClone(value) : undefined; }
+  async taskGraph(rootTaskId = "task-demo-root"): Promise<TaskGraphDto> {
+    const tasks = [...this.tasks.values()];
+    const nodes = tasks.map((task, index) => ({
+      id: task.id,
+      type: "task" as const,
+      label: task.objective,
+      status: task.status,
+      role: this.agents.get(task.assignedAgentId ?? "")?.role,
+      agentId: task.assignedAgentId,
+      taskId: task.id,
+      position: { x: (index % 3) * 280, y: Math.floor(index / 3) * 150 },
+    }));
+    const dependencyEdges = tasks.flatMap((task) =>
+      task.dependencyIds.map((dependencyId) => ({
+        id: `edge-${dependencyId}-${task.id}`,
+        source: dependencyId,
+        target: task.id,
+        kind: "dependency" as const,
+      })),
+    );
+    const workflowEdges = [
+      { id: "edge-root-research-a", source: "task-demo-root", target: "task-demo-research-a", kind: "delegation" as const },
+      { id: "edge-root-research-b", source: "task-demo-root", target: "task-demo-research-b", kind: "delegation" as const },
+      { id: "edge-coder-review", source: "task-demo-coder", target: "task-demo-review", kind: "review" as const },
+      { id: "edge-review-final", source: "task-demo-review", target: "task-demo-final", kind: "handoff" as const },
+    ];
+    return taskGraphDtoSchema.parse({ rootTaskId, nodes, edges: [...dependencyEdges, ...workflowEdges], generatedAt: new Date().toISOString() });
+  }
+  async metrics(): Promise<RuntimeMetricsDto> {
+    const now = new Date().toISOString(); const pressure = [...this.contexts.values()][0]?.stats.pressure ?? 0; const queueDepth = [...this.tasks.values()].filter((task) => task.status === "pending").length; this.metricSeries.requests.push({ at: now, value: this.requestCount }); this.metricSeries.pressure.push({ at: now, value: pressure }); this.metricSeries.queue.push({ at: now, value: queueDepth });
+    return runtimeMetricsDtoSchema.parse({ generatedAt: now, requestsTotal: this.requestCount, modelCalls: this.requestCount, providerFailures: 0, contextPressure: pressure, compactions: [...this.contexts.values()].reduce((count, context) => count + context.compactions.length, 0), memoryConsolidations: this.memories.size, retrievalLatencyMs: 4.2, toolCalls: this.toolCallCount, ptcExecutions: this.ptcCount, artifactSpills: [...this.artifacts.values()].filter((artifact) => artifact.sizeBytes > 64_000).length, queueDepth, activeWorkers: 1, sessions: this.sessions.size, activeAgents: [...this.agents.values()].filter((agent) => agent.status === "running").length, activeTasks: [...this.tasks.values()].filter((task) => task.status === "running").length, series: { requests: this.metricSeries.requests.slice(-60), pressure: this.metricSeries.pressure.slice(-60), queue: this.metricSeries.queue.slice(-60) } });
+  }
+  async operations(): Promise<OperationsDto> { const now = new Date().toISOString(); const health = this.health.liveness(); const readiness = await this.health.readiness(); const workers: WorkerSummaryDto[] = [{ id: "worker-demo-01", status: "idle", completedJobs: 14, failedJobs: 1, heartbeatAt: now }]; const jobs: JobSummaryDto[] = [{ id: "job-demo-consolidation", type: "consolidation", status: "completed", attempts: 1, availableAt: now, workerId: workers[0].id, createdAt: now }]; return operationsDtoSchema.parse({ generatedAt: now, health, readiness, workers, jobs, storage: { memoryCount: this.memories.size, artifactCount: this.artifacts.size }, migrations: { schemaVersion: 1, pending: 0 }, sandbox: { backend: "demo-subprocess", status: "available", capabilities: ["rpc-only", "wall-clock-timeout", "bounded-output"] }, provider: { status: "available", names: ["deterministic-demo"] }, audit: { rows: this.toolCallCount + this.ptcCount, retention: "in-memory demo" } }); }
+
   async startGeneration(sessionId: string, content: string, retryOfMessageId?: string): Promise<ChatGenerationDto> {
+    this.requestCount += 1;
     const session = this.sessions.get(sessionId); if (!session) throw notFound("Session not found.");
     const generationId = `gen-${randomUUID().slice(0, 12)}`; const now = new Date().toISOString(); let attempt = 1; let userMessageId: string | undefined;
     if (retryOfMessageId) {
@@ -216,6 +309,32 @@ export class DemoConsoleRuntimeService implements InspectorRuntimeService {
       make({ id: "memory-sqlite", type: "decision", content: "The early prototype used SQLite during local development.", sourceIds: [firstId], sourceReferences: [{ sessionId, messageId: firstId }], createdAt: ts, updatedAt: ts, importance: 0.45, confidence: 0.76, sourceType: "tool_observation", status: "superseded", supersededBy: "memory-postgres", derivedFromMemoryIds: [], confirmationCount: 1, reinforcementScore: 0.1, stale: false, durability: "normal", scope: { kind: "project", id: "mnemos" }, entities: ["Mnemos", "SQLite"], tags: ["history", "database"] });
       make({ id: "memory-compaction", type: "episodic", content: "Context compaction preserves canonical History and updates an automatic pin.", sourceIds: [firstId, lastId], sourceReferences: [{ sessionId, messageId: firstId }, { sessionId, messageId: lastId }], createdAt: ts, updatedAt: ts, importance: 0.63, confidence: 0.88, sourceType: "derived_summary", status: "active", derivedFromMemoryIds: ["memory-typescript"], confirmationCount: 2, reinforcementScore: 0.4, stale: false, durability: "normal", scope: { kind: "session", id: sessionId }, entities: ["Context", "History"], tags: ["compaction", "runtime"] });
     }
+  }
+
+  private seedAdvancedFixtures(sessionId: string): void {
+    const now = new Date().toISOString();
+    const artifact = (id: string, type: string, mimeType: string, sizeBytes: number, summary: string, taskId?: string, agentId?: string): void => { this.artifacts.set(id, { id, type, mimeType, sizeBytes, checksum: `sha256:demo-${id}`, createdAt: now, updatedAt: now, createdBy: agentId ?? "visible.general", sessionId, taskId, agentId, scope: "session", summary, provenance: { sourceCount: 2, representativeRefs: ["history:demo-session-01-m1", "task:task-demo-root"] } }); };
+    artifact("artifact://demo-research", "research-report", "text/plain", 184_320, "Bounded research report; use range reads for the body.", "task-demo-research-a", "researcher");
+    artifact("artifact://demo-result-json", "task-result", "application/json", 72_400, "Structured task result with source references.", "task-demo-coder", "coder");
+    const tool = (name: string, namespace: string, description: string, permissions: string[], sideEffect: "read" | "write" | "destructive", concurrencySafe: boolean, loaded: boolean, source: "core" | "dynamic" | "ptc"): void => { this.tools.set(name, { name, namespace, description, permissions, sideEffect, concurrencySafe, schema: { type: "object", properties: { query: { type: "string" } } }, schemaTokens: name.length + 42, loaded, internal: false, discovery: { source } }); };
+    tool("memory.search", "memory", "Search ranked long-term memories.", ["memory:read"], "read", true, true, "core"); tool("history.search", "history", "Search canonical History.", ["history:read"], "read", true, true, "core"); tool("artifact.query", "artifact", "Query bounded text snippets.", ["artifact:read"], "read", true, true, "core"); tool("artifact.read", "artifact", "Read a bounded byte range.", ["artifact:read"], "read", true, true, "core"); tool("state.patch", "state", "Patch mutable task state.", ["state:write"], "write", false, false, "dynamic"); tool("artifact.delete", "artifact", "Delete an artifact (destructive).", ["artifact:delete"], "destructive", false, false, "dynamic"); tool("run_code", "ptc", "Execute a bounded program through the PTC sandbox.", ["tool:execute"], "write", false, true, "ptc");
+    const agent = (id: string, name: string, role: string, status: AgentSummaryDto["status"], modelProfile: string, permissions: string[], toolNames: string[], taskId?: string): void => { const summary = { id, name, role, status, sessionId, taskId, modelProfile, contextLimitTokens: role === "planner" ? 131_072 : 65_536, permissions, toolCount: toolNames.length, ptcEnabled: toolNames.includes("run_code"), tokensUsed: role === "planner" ? 8_420 : 2_140, durationMs: status === "completed" ? 1_280 : 0, budget: { maxModelCalls: 20, maxToolCalls: 100, maxPtcExecutions: 10, maxChildTasks: role === "planner" ? 8 : 0, maxTokens: 32_000 }, delegationDepth: role === "planner" ? 0 : 1, retryCount: 0 }; this.agents.set(id, { ...summary, instructionsPreview: `${name} is a bounded ${role} role.`, objective: role === "planner" ? "Coordinate a source-grounded implementation." : `Complete the ${role} assignment.`, loadedToolNames: toolNames, artifactIds: [...this.artifacts.keys()].filter((artifactId) => artifactId.includes(role === "researcher" ? "research" : "result")), memoryRefs: ["memory-typescript"], localStateKeys: ["objective", "progress"] }); };
+    agent("visible.general", "Visible General", "visible", "idle", "default", ["memory:read", "history:read", "artifact:read", "tool:execute"], ["memory.search", "history.search", "context.inspect", "run_code"]);
+    agent("planner", "Planner", "planner", "completed", "reasoning", ["memory:read", "history:read", "artifact:read", "tool:execute"], ["memory.search", "history.search", "artifact.query", "run_code"], "task-demo-root");
+    agent("researcher", "Researcher", "researcher", "completed", "cheap", ["memory:read", "history:read", "artifact:read", "tool:execute"], ["memory.search", "history.search", "artifact.query", "artifact.read", "run_code"], "task-demo-research-a");
+    agent("coder", "Coder", "coder", "completed", "coding", ["artifact:read", "artifact:write", "state:read", "state:write", "tool:execute"], ["artifact.query", "artifact.read", "state.patch", "run_code"], "task-demo-coder");
+    agent("reviewer", "Reviewer", "reviewer", "waiting", "reasoning", ["artifact:read", "memory:read", "history:read", "state:read"], ["artifact.query", "memory.search"], "task-demo-review");
+    agent("hidden.memory", "Hidden Memory", "hidden-memory", "idle", "memory", ["memory:read", "memory:write", "history:read"], ["memory.search", "history.search"]);
+    const task = (id: string, objective: string, assignedAgentId: string, status: TaskSummaryDto["status"], dependencyIds: string[], parentTaskId?: string): void => { const summary = { id, parentTaskId, sessionId, createdBy: "planner", assignedAgentId, objective, status, createdAt: now, updatedAt: now, dependencyIds, childTaskIds: [], outputRefs: id.includes("research") ? ["artifact://demo-research"] : id.includes("coder") ? ["artifact://demo-result-json"] : [], retryCount: 0, reviewIteration: id.includes("review") ? 1 : 0, durationMs: status === "completed" ? 1_280 : 0 }; this.tasks.set(id, { ...summary, inputPreview: objective, outputPreview: status === "completed" ? "Completed with bounded references." : undefined, sharedState: { milestone: "console hardening", owner: assignedAgentId }, localSummary: "Read-only demo task summary.", handoffs: [], ...(status === "failed" ? { failure: { code: "demo_failure", message: "Demo task failed safely." } } : {}) }); };
+    task("task-demo-root", "Coordinate a source-grounded implementation.", "planner", "completed", []); task("task-demo-research-a", "Inspect runtime artifacts and memory evidence.", "researcher", "completed", [], "task-demo-root"); task("task-demo-research-b", "Check tool and PTC activity.", "researcher", "completed", [], "task-demo-root"); task("task-demo-coder", "Prepare a bounded implementation result.", "coder", "completed", ["task-demo-research-a", "task-demo-research-b"], "task-demo-root"); task("task-demo-review", "Review the implementation result.", "reviewer", "waiting", ["task-demo-coder"], "task-demo-root"); task("task-demo-final", "Synthesize the reviewed result.", "planner", "pending", ["task-demo-review"], "task-demo-root");
+    const timeline = [
+      { id: "ptc-event-1", atMs: 0, kind: "started" as const, label: "PTC execution started", status: "running" as const },
+      { id: "ptc-event-2", atMs: 18, kind: "tool_started" as const, label: "Parallel read batch", toolName: "memory.search", sideEffect: "read" as const, concurrency: 3, status: "running" as const },
+      { id: "ptc-event-3", atMs: 62, kind: "barrier" as const, label: "Write barrier", sideEffect: "write" as const, concurrency: 1, status: "completed" as const },
+      { id: "ptc-event-4", atMs: 88, kind: "tool_completed" as const, label: "Artifact handle returned", toolName: "artifact.query", sideEffect: "read" as const, concurrency: 2, durationMs: 26, status: "completed" as const },
+      { id: "ptc-event-5", atMs: 112, kind: "completed" as const, label: "Final result externalized", durationMs: 112, status: "completed" as const },
+    ];
+    this.ptcExecutions.set("ptc-demo-01", { id: "ptc-demo-01", sessionId, agentId: "researcher", taskId: "task-demo-research-a", status: "completed", startedAt: now, completedAt: now, durationMs: 112, toolCalls: 6, peakConcurrency: 3, artifactSpills: 1, quotaUsed: 6, quotaLimit: 100, finalResultKind: "artifact", codePreview: "const results = await Promise.all([...queries].map(tools.memory.search));", timeline, resultPreview: "artifact://demo-research", artifactIds: ["artifact://demo-research"], permissions: ["memory:read", "artifact:read", "tool:execute"] });
   }
   private syncContext(sessionId: string): void {
     const current = this.contexts.get(sessionId); const session = this.sessions.get(sessionId); if (!current || !session) return;
