@@ -260,6 +260,11 @@ pnpm eval:reliability
 pnpm eval:soak
 pnpm eval:agents
 pnpm eval:agents:soak
+pnpm test:server
+pnpm test:console
+pnpm test:e2e
+pnpm dev:server
+pnpm dev:console
 pnpm mnemos doctor
 pnpm mnemos migrate
 pnpm mnemos rebuild-indexes
@@ -349,3 +354,37 @@ Phase 13 leaves stable boundaries for later deployment work: `DurableJobQueue`/`
 tool authority remain behind `ToolDiscoveryIndex`, `LoadedToolSet`, and `ToolDispatcher`. Phase 14 Multi-Agent
 Extensions consume these boundaries through `AgentRegistry`, `TaskManager`, `SqliteAgentTaskStore`,
 `MultiAgentOrchestrator`, `HandoffContextBuilder`, and `AgentArtifactWorkspace`. No Phase 15 is implemented.
+
+## Web Console — Frontend F1
+
+Frontend F1 (Console Foundation) is implemented as a small observer/workbench surface over the existing runtime; it
+does not replace the Harness or become a second source of truth. The workspace now contains:
+
+- `packages/contracts`: Zod-authored, versioned public DTOs shared by the server and React client.
+- `apps/server`: a dependency-injected Fastify adapter exposing `/api/v1/meta`, health/readiness, runtime summary,
+  paginated sessions, safe session detail, and an allowlisted SSE event stream.
+- `apps/console`: React 19 + Vite + TanStack Router/Query + Zustand + Tailwind UI primitives. Overview, Sessions,
+  read-only session details, live Events, and safe Settings pages are available with responsive navigation and
+  system/light/dark themes.
+
+The API maps internal runtime data into bounded DTOs. SSE publishes only safe metadata from an allowlist, truncates
+large payloads, sends keepalive comments, and removes EventBus listeners on disconnect. The console keeps a bounded
+live debug buffer; it is not the canonical audit log. The runtime remains authoritative, and browser disconnects do
+not own or stop it. Production deployments must provide their own authentication boundary; F1 does not expose an auth
+system. CORS is configured explicitly and the development-only demo seed route is disabled in production.
+
+For offline development and browser tests, the server has an in-memory deterministic test/demo runtime. It needs no
+provider credentials and is never enabled by the production profile. Start the two processes with:
+
+```bash
+pnpm build
+pnpm dev:server   # terminal 1, API on 127.0.0.1:4317
+pnpm dev:console  # terminal 2, Vite on 127.0.0.1:5173
+```
+
+Frontend verification is available through `pnpm test:server`, `pnpm test:console`, and `pnpm test:e2e` (Chromium).
+The full CI workflow runs these in addition to every existing backend build, test, and offline evaluation. Console
+assets are intentionally modest for F1 (the current Vite build is roughly 440 kB raw / 133 kB gzip); F2 streaming
+chat, F3 context/memory inspectors, F4 artifact/tool/PTC views, F5 task graph, and F6 dashboard polish remain
+pending. F1 deliberately does not add a chat composer, token streaming, Memory Explorer, Artifact browser, Monaco,
+React Flow, auth UI, or a provider key manager.

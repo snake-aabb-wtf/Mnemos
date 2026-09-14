@@ -73,6 +73,18 @@ jobs:
       - name: Run multi-agent soak
         run: pnpm eval:agents:soak
 
+      - name: Run shared contract and server tests
+        run: pnpm test:server
+
+      - name: Run console component tests
+        run: pnpm test:console
+
+      - name: Install Chromium for browser smoke tests
+        run: pnpm --filter @mnemos/console exec playwright install --with-deps chromium
+
+      - name: Run browser smoke tests
+        run: pnpm test:e2e
+
       - name: Run migration and doctor checks
         env:
           MNEMOS_DB_PATH: ${{ runner.temp }}/mnemos-ci.sqlite

@@ -179,4 +179,8 @@ export class EventBus<Events extends object = HarnessEventMap> {
       }
     }
   }
+
+  listenerCount<K extends keyof Events>(event: K): number {
+    return this.listeners.get(event)?.size ?? 0;
+  }
 }

@@ -1,0 +1,24 @@
+import { useState, type ButtonHTMLAttributes, type HTMLAttributes, type PropsWithChildren, type JSX } from "react";
+import { Check, Copy, LoaderCircle } from "lucide-react";
+import { shortId } from "../lib/format";
+
+export function Button({ className = "", variant = "default", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "default" | "quiet" | "outline" }): JSX.Element {
+  const variants = { default: "bg-amber-400 text-zinc-950 hover:bg-amber-300", quiet: "bg-transparent text-ink-muted hover:bg-ink/5 dark:hover:bg-white/10", outline: "border border-line bg-transparent text-ink hover:border-amber-400/60 hover:text-amber-500" };
+  return <button className={`inline-flex min-h-9 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/80 disabled:cursor-not-allowed disabled:opacity-45 ${variants[variant]} ${className}`} {...props} />;
+}
+
+export function Card({ className = "", ...props }: HTMLAttributes<HTMLDivElement>): JSX.Element { return <section className={`rounded-xl border border-line bg-panel shadow-panel ${className}`} {...props} />; }
+export function CardHeader({ className = "", ...props }: HTMLAttributes<HTMLDivElement>): JSX.Element { return <div className={`border-b border-line px-5 py-4 ${className}`} {...props} />; }
+export function CardBody({ className = "", ...props }: HTMLAttributes<HTMLDivElement>): JSX.Element { return <div className={`px-5 py-5 ${className}`} {...props} />; }
+export function Label({ children, className = "" }: PropsWithChildren<{ className?: string }>): JSX.Element { return <span className={`text-[11px] font-semibold uppercase tracking-[0.15em] text-ink-muted ${className}`}>{children}</span>; }
+export function Badge({ children, tone = "neutral" }: PropsWithChildren<{ tone?: "neutral" | "success" | "warning" | "danger" }>): JSX.Element { const tones = { neutral: "bg-ink/7 text-ink-muted dark:bg-white/10", success: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300", warning: "bg-amber-400/18 text-amber-700 dark:text-amber-300", danger: "bg-red-500/12 text-red-700 dark:text-red-300" }; return <span className={`inline-flex items-center rounded-full px-2 py-1 text-[11px] font-semibold ${tones[tone]}`}>{children}</span>; }
+export function Skeleton({ className = "" }: { className?: string }): JSX.Element { return <div className={`animate-pulse rounded-md bg-ink/7 dark:bg-white/8 ${className}`} aria-hidden="true" />; }
+export function EmptyState({ title, detail }: { title: string; detail: string }): JSX.Element { return <div className="rounded-xl border border-dashed border-line px-6 py-12 text-center"><p className="text-sm font-semibold text-ink">{title}</p><p className="mt-2 text-sm text-ink-muted">{detail}</p></div>; }
+export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }): JSX.Element { return <div role="alert" className="rounded-xl border border-red-500/25 bg-red-500/5 px-5 py-4"><p className="text-sm font-semibold text-red-700 dark:text-red-300">{message}</p>{onRetry ? <Button className="mt-3" variant="outline" onClick={onRetry}>Try again</Button> : null}</div>; }
+export function StatusDot({ status }: { status: "live" | "reconnecting" | "disconnected" | "ready" | "not_ready" }): JSX.Element { const tone = status === "live" || status === "ready" ? "bg-emerald-400" : status === "reconnecting" ? "bg-amber-400" : "bg-red-400"; return <span className={`inline-block h-2 w-2 rounded-full ${tone} ${status === "live" ? "shadow-[0_0_0_4px_rgba(52,211,153,0.12)]" : ""}`} aria-hidden="true" />; }
+export function StatusBadge({ status }: { status: string }): JSX.Element { const normalized = status.toLowerCase(); const tone = normalized.includes("ready") || normalized === "active" || normalized === "completed" ? "success" : normalized.includes("fail") || normalized.includes("error") ? "danger" : normalized.includes("warn") || normalized.includes("running") ? "warning" : "neutral"; return <Badge tone={tone}>{status.replaceAll("_", " ")}</Badge>; }
+export function CopyableId({ value }: { value: string }): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  async function copy(): Promise<void> { try { await navigator.clipboard?.writeText(value); setCopied(true); window.setTimeout(() => setCopied(false), 1200); } catch { /* selection remains readable */ } }
+  return <button type="button" title={`Copy ${value}`} aria-label={`Copy full id ${value}`} onClick={() => void copy()} className="group inline-flex items-center gap-1 rounded px-1 font-mono text-xs text-ink-muted hover:bg-ink/5 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/80">{shortId(value)}{copied ? <Check size={13} className="text-emerald-500" /> : <Copy size={13} className="opacity-0 transition-opacity group-hover:opacity-100" />}</button>;
+}

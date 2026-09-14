@@ -6,3 +6,7 @@ coverage/
 *.sqlite-shm
 *.sqlite-wal
 .env
+*.tsbuildinfo
+apps/console/playwright-report/
+apps/console/test-results/
+apps/console/blob-report/

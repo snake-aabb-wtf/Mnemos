@@ -9,9 +9,16 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -b",
-    "typecheck": "tsc -b --pretty false",
+    "build": "tsc -b && pnpm --filter @mnemos/console build",
+    "build:server": "pnpm --filter @mnemos/server build",
+    "build:console": "pnpm --filter @mnemos/console build",
+    "typecheck": "tsc -b --pretty false && pnpm --filter @mnemos/console exec tsc -b --pretty false",
     "test": "vitest run",
+    "test:server": "pnpm exec vitest run apps/server/src/server.test.ts",
+    "test:console": "pnpm --filter @mnemos/console test",
+    "test:e2e": "pnpm --filter @mnemos/console test:e2e",
+    "dev:server": "pnpm --filter @mnemos/server build && pnpm --filter @mnemos/server start",
+    "dev:console": "pnpm --filter @mnemos/console dev",
     "eval:retrieval": "vitest run packages/storage/src/retrieval.test.ts",
     "eval:ptc": "vitest run packages/storage/src/ptc.test.ts",
     "eval:tools": "vitest run packages/core/src/tool-discovery.test.ts",

@@ -1763,6 +1763,35 @@ Phase 14 的运行边界明确为 bounded、observable、permission-aware、budg
 
 ---
 
+# Frontend Console Architecture (F1)
+
+Frontend F1 adds a deliberately thin Web Console without changing the runtime source-of-truth rules. The Harness,
+canonical History, Memory, Artifacts, tasks, and policy remain authoritative; the browser is an observer/workbench
+client and the Fastify server is an adapter boundary, not a second runtime. The boundary is:
+
+```text
+Runtime services → injected ConsoleRuntimeService → Fastify /api/v1 → shared Zod contracts → React Console
+                                                     └─ EventBus → safe allowlisted SSE DTOs
+```
+
+`packages/contracts` owns public versioned DTO schemas and inferred types. `apps/server` performs request/query/body
+validation, request IDs, CORS, public mapping, error translation, and SSE lifecycle. It must not instantiate a second
+Harness or expose internal domain objects. `apps/console` uses React 19, Vite, TanStack Router, TanStack Query for
+server state, Zustand for UI-only state, Tailwind, and local shadcn-style primitives. F1 routes are Overview,
+Sessions, session detail shell, Events, and read-only Settings. Chat streaming, Memory/Context inspectors,
+Artifact/Tool/PTC UI, task graphs, and dashboard polish are deliberately staged for F2–F6.
+
+The F1 event stream is named SSE over the existing EventBus. Only an explicit allowlist of safe lifecycle metadata is
+mapped; prompts, secrets, raw tool arguments, paths, and large result bodies are excluded or bounded. The stream has
+heartbeats and unsubscribes on disconnect. F1 provides no replay log, authentication system, or claim of a browser
+being a canonical audit store. CORS is explicit, and the deterministic demo seed route is development/test only.
+
+The console is developed and tested without provider credentials. A deterministic in-memory runtime fixture supports
+REST/SSE integration and Chromium Playwright smoke tests. Production hosts inject a real runtime service and place
+authentication/authorization at the deployment boundary until a later frontend phase defines those controls.
+
+---
+
 # 21. 核心不可违反原则
 
 1. Context is a cache, not a database.

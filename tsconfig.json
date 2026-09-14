@@ -3,6 +3,8 @@
   "references": [
     { "path": "packages/core" },
     { "path": "packages/storage" },
-    { "path": "apps/cli" }
+    { "path": "packages/contracts" },
+    { "path": "apps/cli" },
+    { "path": "apps/server" }
   ]
 }

@@ -1,0 +1,19 @@
+{
+  "name": "@mnemos/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/index.js",
+    "test": "cd ../.. && pnpm exec vitest run apps/server/src/server.test.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.0.0",
+    "@mnemos/contracts": "workspace:*",
+    "@mnemos/core": "workspace:*",
+    "fastify": "^5.6.1"
+  }
+}

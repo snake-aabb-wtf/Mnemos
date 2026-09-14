@@ -1,0 +1,4 @@
+export function formatDate(value: string | undefined): string { if (!value) return "N/A"; return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)); }
+export function formatRelative(value: string | undefined): string { if (!value) return "N/A"; const delta = Date.now() - new Date(value).getTime(); if (delta < 60_000) return "just now"; if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`; if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}h ago`; return `${Math.floor(delta / 86_400_000)}d ago`; }
+export function formatNumber(value: number | undefined): string { return value === undefined ? "N/A" : new Intl.NumberFormat().format(value); }
+export function shortId(value: string): string { return value.length <= 16 ? value : `${value.slice(0, 7)}…${value.slice(-5)}`; }
